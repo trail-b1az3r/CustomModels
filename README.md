@@ -10,7 +10,8 @@ No custom models are available by default, but can instead be downloaded from th
 
 | File extension                | Folder                                                             |
 | ----------------------------- | ------------------------------------------------------------------ |
-| `.whacker`                    | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Sabers` |\n| `.weeeeeeeeeeeeeeeeeeeee`      | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Sabers` |
+| `.whacker`                    | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Sabers` |
+| `.weeeeeeeeeeeeeeeeeeeee`      | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Sabers` |
 | `.box`                        | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Walls`  |
 | `.cyoob`                      | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Notes`  |
 | `.qsaber`, `.qwall`, `.qbloq` | `/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Legacy` |
@@ -18,4 +19,6 @@ No custom models are available by default, but can instead be downloaded from th
 
 (Due to conflicts with custom songs, zip files cannot be uploaded into MBF, but can still be placed into the folder manually if desired.)
 
-PC `.saber` conversion creates both a `.whacker` saber and a separate `.weeeeeeeeeeeeeeeeeeeee` trail-selection package. The trail package is selectable in the Trail and Menu Trail lists; it keeps the Unity bundle dependencies intact so trail materials and endpoint transforms remain valid.\n\nAfter uploading model files, they can be selected and tweaked through the "Custom Models" mod tab, located directly to the left of the main menu.
+PC `.saber` conversion creates both a `.whacker` saber and a separate `.weeeeeeeeeeeeeeeeeeeee` trail-selection package. The trail package is selectable in the Trail and Menu Trail lists; it keeps the Unity bundle dependencies intact so trail materials and endpoint transforms remain valid.
+
+After uploading model files, they can be selected and tweaked through the "Custom Models" mod tab, located directly to the left of the main menu.
