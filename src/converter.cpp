@@ -195,6 +195,15 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
 
     std::filesystem::path convertedBundle;
     std::filesystem::path temporaryQuest;
+    struct TemporaryFiles {
+        std::filesystem::path& bundle;
+        std::filesystem::path& quest;
+        ~TemporaryFiles() {
+            std::error_code ec;
+            if (!bundle.empty()) std::filesystem::remove(bundle, ec);
+            if (!quest.empty()) std::filesystem::remove(quest, ec);
+        }
+    } cleanup{convertedBundle, temporaryQuest};
     try {
         std::error_code ec;
         std::filesystem::create_directories(destFolder, ec);
@@ -264,9 +273,6 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
         result.message = std::string("conversion failed: ") + e.what();
     }
 
-    std::error_code cleanup;
-    if (!convertedBundle.empty()) std::filesystem::remove(convertedBundle, cleanup);
-    if (!temporaryQuest.empty()) std::filesystem::remove(temporaryQuest, cleanup);
     return result;
 }
 
