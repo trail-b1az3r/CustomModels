@@ -216,7 +216,7 @@ void CustomModels::SearchBeatModsAssets(std::string query, int category, bool tr
 
     auto request = UnityEngine::Networking::UnityWebRequest::Get(url);
     request->SendWebRequest()->add_completed(BEATMODS_REQUEST_COMPLETED([request, category, trails, callback](UnityEngine::AsyncOperation*) {
-        if (request->isNetworkError() || request->isHttpError()) {
+        if (request->get_responseCode() == 0 || request->get_responseCode() >= 400) {
             callback({}, "BeatMods API request failed: " + std::string(request->get_error()));
             return;
         }
