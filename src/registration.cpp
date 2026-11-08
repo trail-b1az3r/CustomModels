@@ -18,14 +18,20 @@ DEFINE_TYPE(CustomModels, CustomSaberAPI);
 bool CustomModels::CustomSaberAPI::InitOverride(UnityEngine::Transform* parent, GlobalNamespace::Saber* saber) {
     logger.debug("ingame saber init");
 
-    if (transform->GetChildCount() > 0) {
-        logger.debug("already have a child! will update colors but not create saber");
-        UpdateSaberColor(transform, false, saber->saberType);
+    if (!parent || !saber)
+        return false;
+
+    // The supplied parent is the actual saber model anchor. Parenting the
+    // SaberModelController component's own transform here creates an extra
+    // wrapper in the controller hierarchy (which can be rendered by the
+    // first-person camera as well as by the gameplay saber).
+    auto name = saber->saberType == GlobalNamespace::SaberType::SaberA ? "LeftSaber" : "RightSaber";
+    if (parent->Find(name)) {
+        UpdateSaberColor(parent, false, saber->saberType);
         return false;
     }
 
-    transform->SetParent(parent, false);
-    InitSaber(transform, false, saber->saberType);
+    InitSaber(parent, false, saber->saberType);
 
     return false;
 }
