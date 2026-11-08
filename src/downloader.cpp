@@ -55,6 +55,16 @@ namespace {
         return value[key].GetInt();
     }
 
+    uint64_t ReadUInt64(rapidjson::Value const& value, char const* key) {
+        if (!value.IsObject() || !value.HasMember(key) || !value[key].IsNumber())
+            return 0;
+        if (value[key].IsUint64())
+            return value[key].GetUint64();
+        if (value[key].IsInt64() && value[key].GetInt64() > 0)
+            return static_cast<uint64_t>(value[key].GetInt64());
+        return 0;
+    }
+
     bool IsAllowedType(std::string const& type, int category) {
         if (category == 0)
             return type == "saber_whacker" || type == "saber_saber";
@@ -235,7 +245,7 @@ void CustomModels::SearchBeatModsAssets(std::string query, int category, bool tr
             auto item = new BeatModsAssetItem();
             item->id = ReadInt(asset, "id");
             item->category = category;
-            item->fileSize = static_cast<uint64_t>(std::max(0, ReadInt(asset, "fileSize")));
+            item->fileSize = ReadUInt64(asset, "fileSize");
             item->type = std::move(type);
             item->name = std::move(name);
             item->downloadUrl = std::move(downloadUrl);
