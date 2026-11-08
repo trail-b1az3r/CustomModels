@@ -81,10 +81,17 @@ static UnityEngine::Material* FindReplacement(std::string const& name) {
 }
 
 static void ReplaceMaterials(UnityEngine::Renderer* renderer) {
-    auto materials = renderer->materials;
+    // Reading Renderer::materials asks Unity for per-renderer material instances.
+    // That silently breaks shared-material batching even when no replacement is
+    // needed. Keep the original materials shared and clone only the entries that
+    // carry our explicit _replace marker.
+    auto materials = renderer->sharedMaterials;
     bool changed = false;
 
     for (auto& material : materials) {
+        if (!material)
+            continue;
+
         std::string name = material->name->ToLower();
         if (name.find("_replace") == std::string::npos || name.find("_done") != std::string::npos)
             continue;
@@ -95,21 +102,23 @@ static void ReplaceMaterials(UnityEngine::Renderer* renderer) {
         if (name.find("_noCC") == std::string::npos && !CustomModels::ShouldColor(material))
             name += "_noCC";
 
+        auto color = material->color;
         if (!replacement) {
             logger.debug("no replacement found");
+            // Do not rename the bundle's shared asset: another instance may use it.
+            material = UnityEngine::Object::Instantiate(material);
             material->name = name;
-            continue;
+        } else {
+            logger.debug("found replacement {}", replacement->name);
+            material = UnityEngine::Object::Instantiate(replacement);
+            material->name = name;
+            material->color = color;
         }
-        logger.debug("found replacement {}", replacement->name);
-        auto color = material->color;
-        material = UnityEngine::Object::Instantiate(replacement);
-        material->name = name;
-        material->color = color;
         changed = true;
     }
 
     if (changed)
-        renderer->materials = materials.convert();  // UnityW inconsistency
+        renderer->sharedMaterials = materials.convert();  // UnityW inconsistency
 }
 
 void CustomModels::ReplaceMaterials(UnityEngine::GameObject* object) {
