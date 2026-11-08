@@ -67,7 +67,7 @@ LoadThumbnail(UnityEngine::AssetBundle* bundle, CustomModels::Descriptor& descri
     files.emplace_back(descriptor.coverImage, std::string(bytes.begin(), bytes.end()));
 }
 
-static void WriteZip(
+static bool WriteZip(
     UnityEngine::AssetBundle* bundle,
     CustomModels::Manifest& manifest,
     std::filesystem::path const& bundlePath,
@@ -81,9 +81,14 @@ static void WriteZip(
     files.emplace_back("package.json", WriteToString(manifest));
 
     std::string name = MetaCore::Strings::UniqueFileName(file, folder);
-    CustomModels::WriteZipFile(folder / name, files);
+    auto const output = folder / name;
+    if (!CustomModels::WriteZipFile(output.string(), files)) {
+        logger.error("failed to write converted legacy model {}", output.string());
+        return false;
+    }
 
     logger.info("converted {} to {}", bundlePath.filename().string(), name);
+    return true;
 }
 
 template <class T>
@@ -131,9 +136,9 @@ static bool ConvertQSaber(std::filesystem::path const& path) {
     }
     manifest.config = LoadSaberConfig(bundle);
 
-    WriteZip(bundle, manifest, path, folder, output);
+    bool const written = WriteZip(bundle, manifest, path, folder, output);
     bundle->Unload(true);
-    return true;
+    return written;
 }
 
 static CustomModels::NoteInfo LoadNoteConfig(UnityEngine::AssetBundle* bundle) {
