@@ -8,6 +8,8 @@ namespace CustomModels {
     struct Asset {
         std::string currentFile;
         std::string loadingFile;
+        std::string currentBundleFile;
+        std::string loadingBundleFile;
         UnityEngine::AssetBundle* bundle;
         UnityEngine::GameObject* asset;
 
