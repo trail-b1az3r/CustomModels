@@ -170,9 +170,9 @@ static bool ConvertQBloq(std::filesystem::path const& path) {
     }
     manifest.config = LoadNoteConfig(bundle);
 
-    WriteZip(bundle, manifest, path, folder, output);
+    bool const written = WriteZip(bundle, manifest, path, folder, output);
     bundle->Unload(true);
-    return true;
+    return written;
 }
 
 static CustomModels::WallInfo LoadWallConfig(UnityEngine::AssetBundle* bundle) {
@@ -207,9 +207,9 @@ static bool ConvertQWall(std::filesystem::path const& path) {
     }
     manifest.config = LoadWallConfig(bundle);
 
-    WriteZip(bundle, manifest, path, folder, output);
+    bool const written = WriteZip(bundle, manifest, path, folder, output);
     bundle->Unload(true);
-    return true;
+    return written;
 }
 
 void CustomModels::ConvertLegacyModels() {
