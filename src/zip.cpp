@@ -9,12 +9,16 @@ static std::string ReadFileInternal(zip* zip, int index) {
     struct zip_stat stat;
     std::string ret;
 
-    zip_stat_index(zip, index, 0, &stat);
-    ret.resize(stat.size);
-
+    if (zip_stat_index(zip, index, 0, &stat) != 0)
+        return ret;
     auto file = zip_fopen_index(zip, index, 0);
-    zip_fread(file, ret.data(), stat.size);
+    if (!file)
+        return ret;
+    ret.resize(stat.size);
+    auto const read = zip_fread(file, ret.data(), stat.size);
     zip_fclose(file);
+    if (read < 0 || static_cast<zip_uint64_t>(read) != stat.size)
+        return {};
 
     return ret;
 }
@@ -45,30 +49,65 @@ bool CustomModels::ExtractAllLegacyAssets(std::string const& path, std::string c
     if (!zip)
         return false;
 
-    auto files = zip_get_num_entries(zip, 0);
+    std::error_code ec;
+    std::filesystem::create_directories(destination, ec);
+    if (ec) {
+        zip_discard(zip);
+        return false;
+    }
 
-    for (int file = 0; file < files; file++) {
-        std::string name = zip_get_name(zip, file, ZIP_FL_ENC_GUESS);
-        if (!name.ends_with(".qsaber") && !name.ends_with(".qbloq") && !name.ends_with(".qwall"))
+    auto const files = zip_get_num_entries(zip, 0);
+    int extracted = 0;
+    for (zip_int64_t file = 0; file < files; file++) {
+        auto const* rawName = zip_get_name(zip, file, ZIP_FL_ENC_GUESS);
+        if (!rawName)
+            continue;
+        std::filesystem::path const entryPath(rawName);
+        auto const extension = entryPath.extension().string();
+        if (extension != ".qsaber" && extension != ".qbloq" && extension != ".qwall")
             continue;
 
-        std::string output = std::filesystem::path(destination) / MetaCore::Strings::UniqueFileName(name, destination);
-        writefile(output, ReadFileInternal(zip, file));
+        // Never trust paths stored inside an uploaded archive.
+        auto const name = entryPath.filename().string();
+        if (name.empty() || name == "." || name == "..")
+            continue;
+        auto const outputName = MetaCore::Strings::UniqueFileName(name, destination);
+        auto const output = std::filesystem::path(destination) / outputName;
+        auto const contents = ReadFileInternal(zip, static_cast<int>(file));
+        if (contents.empty())
+            continue;
+        writefile(output.string(), contents);
+        if (std::filesystem::exists(output, ec) && !ec)
+            extracted++;
+        ec.clear();
     }
 
     zip_discard(zip);
-    return true;
+    return extracted > 0;
 }
 
-void CustomModels::WriteZipFile(std::string const& path, std::vector<std::pair<std::string, std::string>> const& files) {
-    auto zip = zip_open(path.data(), ZIP_CREATE, nullptr);
-    if (!zip)
-        return;
+bool CustomModels::WriteZipFile(std::string const& path, std::vector<std::pair<std::string, std::string>> const& files) {
+    auto archive = zip_open(path.data(), ZIP_CREATE | ZIP_TRUNCATE, nullptr);
+    if (!archive)
+        return false;
 
-    for (auto& [name, data] : files) {
-        auto buffer = zip_source_buffer_create(data.data(), data.size(), 0, nullptr);
-        zip_file_add(zip, name.c_str(), buffer, ZIP_FL_ENC_GUESS);
+    for (auto const& [name, data] : files) {
+        auto source = zip_source_buffer_create(data.data(), data.size(), 0, nullptr);
+        if (!source || zip_file_add(archive, name.c_str(), source, ZIP_FL_ENC_GUESS) < 0) {
+            if (source)
+                zip_source_free(source);
+            zip_discard(archive);
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+            return false;
+        }
     }
 
-    zip_close(zip);
+    if (zip_close(archive) != 0) {
+        zip_discard(archive);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        return false;
+    }
+    return true;
 }
