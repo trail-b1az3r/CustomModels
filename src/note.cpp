@@ -50,8 +50,14 @@ void CustomModels::NoteVisuals::Awake() {
     for (int i = 0; i < names.size(); i++) {
         if (auto child = transform->Find(names[i]))
             objects[i] = child->gameObject;
-        else
-            logger.critical("missing child {}", names[i]);  // will still crash
+        else {
+            // A model missing one of the variants would otherwise dereference a
+            // null here; an empty stand-in renders nothing but stays safe.
+            logger.error("missing child {}, using an empty placeholder", names[i]);
+            auto placeholder = UnityEngine::GameObject::New_ctor(names[i]);
+            placeholder->transform->SetParent(transform, false);
+            objects[i] = placeholder;
+        }
     }
 
     for (int i = 0; i < objects.size(); i++) {
@@ -66,6 +72,9 @@ void CustomModels::NoteVisuals::OnDestroy() {
 }
 
 void CustomModels::DebrisVisuals::ShowDebris(GlobalNamespace::ColorType color, UnityEngine::Vector3 cutPoint, UnityEngine::Vector3 cutNormal) {
+    if (objects.size() < 2 || !objects[0] || !objects[1])
+        return;
+
     for (int i = 0; i < objects.size(); i++)
         objects[i]->active = i == (int) color;
 
@@ -103,8 +112,15 @@ static std::map<UnityEngine::Renderer*, std::vector<UnityEngine::Material*>> Get
 
 void CustomModels::DebrisVisuals::Awake() {
     objects = ArrayW<UnityEngine::GameObject*>(2);
-    objects[0] = transform->Find("LeftDebris")->gameObject;
-    objects[1] = transform->Find("RightDebris")->gameObject;
+    auto left = transform->Find("LeftDebris");
+    auto right = transform->Find("RightDebris");
+    if (!left || !right) {
+        logger.error("debris children missing on {}", transform->name);
+        enabled = false;
+        return;
+    }
+    objects[0] = left->gameObject;
+    objects[1] = right->gameObject;
 
     leftMaterials = GetSlicableMaterials(objects[0]);
     rightMaterials = GetSlicableMaterials(objects[1]);
@@ -113,24 +129,88 @@ void CustomModels::DebrisVisuals::Awake() {
     objects[1]->AddComponent<ColorVisuals*>()->SetSidedColor(false);
 }
 
-static void FixLegacyObjects(UnityEngine::Transform* prefab) {
-    logger.debug("performing legacy fixes");
-
-    auto notes = UnityEngine::GameObject::New_ctor("Notes")->transform;
-    notes->SetParent(prefab, false);
-
-    for (auto& name : {"LeftArrow", "RightArrow", "LeftDot", "RightDot"})
-        prefab->Find(name)->SetParent(notes, false);
-
-    auto leftDebris = prefab->Find("LeftDebris");
-    auto rightDebris = prefab->Find("RightDebris");
-    if (!leftDebris || !rightDebris)
+// Older Quest models (and every PC model converted from .bloq/.saber) use the
+// flat layout the game shipped with: note parts sit directly on the prefab as
+// NoteLeft/NoteRight/NoteDotLeft/NoteDotRight, and chain parts as
+// BurstSliderHeadLeft/... . The mod expects the modern containers:
+//   Notes/{LeftArrow,RightArrow,LeftDot,RightDot}
+//   Chains/{LeftHead,RightHead,LeftLink,RightLink}
+// so rebuild that shape once after load, from whatever the model actually has.
+static void Rename(UnityEngine::Transform* prefab, char const* from, char const* to) {
+    auto child = prefab->Find(from);
+    if (!child)
         return;
+    child->gameObject->name = to;
+}
 
-    auto debris = UnityEngine::GameObject::New_ctor("Debris")->transform;
-    debris->SetParent(prefab, false);
-    leftDebris->SetParent(debris, false);
-    rightDebris->SetParent(debris, false);
+static void ReparentRename(UnityEngine::Transform* prefab, char const* from, UnityEngine::Transform* parent, char const* to) {
+    if (parent->Find(to))
+        return;
+    auto child = prefab->Find(from);
+    if (!child)
+        return;
+    child->SetParent(parent, false);
+    child->gameObject->name = to;
+}
+
+static void NormalizeHierarchy(UnityEngine::Transform* prefab) {
+    logger.debug("normalizing note hierarchy");
+
+    // Notes
+    if (!prefab->Find("Notes")) {
+        bool const modern = prefab->Find("LeftArrow") || prefab->Find("RightArrow") || prefab->Find("LeftDot") ||
+                            prefab->Find("RightDot");
+        bool const legacy = prefab->Find("NoteLeft") || prefab->Find("NoteRight") || prefab->Find("NoteDotLeft") ||
+                            prefab->Find("NoteDotRight");
+        if (modern || legacy) {
+            auto notes = UnityEngine::GameObject::New_ctor("Notes")->transform;
+            notes->SetParent(prefab, false);
+            if (modern) {
+                for (auto& name : {"LeftArrow", "RightArrow", "LeftDot", "RightDot"})
+                    if (auto child = prefab->Find(name))
+                        child->SetParent(notes, false);
+            } else {
+                ReparentRename(prefab, "NoteLeft", notes, "LeftArrow");
+                ReparentRename(prefab, "NoteRight", notes, "RightArrow");
+                ReparentRename(prefab, "NoteDotLeft", notes, "LeftDot");
+                ReparentRename(prefab, "NoteDotRight", notes, "RightDot");
+            }
+        }
+    }
+
+    // Chains
+    if (!prefab->Find("Chains")) {
+        bool const legacyChains = prefab->Find("BurstSliderHeadLeft") || prefab->Find("BurstSliderHeadRight") ||
+                                  prefab->Find("BurstSliderLeft") || prefab->Find("BurstSliderRight");
+        if (legacyChains) {
+            auto chains = UnityEngine::GameObject::New_ctor("Chains")->transform;
+            chains->SetParent(prefab, false);
+            ReparentRename(prefab, "BurstSliderHeadLeft", chains, "LeftHead");
+            ReparentRename(prefab, "BurstSliderHeadRight", chains, "RightHead");
+            ReparentRename(prefab, "BurstSliderLeft", chains, "LeftLink");
+            ReparentRename(prefab, "BurstSliderRight", chains, "RightLink");
+            // dot variants are the fallback when a head is missing
+            if (!chains->Find("LeftHead"))
+                ReparentRename(prefab, "BurstSliderHeadDotLeft", chains, "LeftHead");
+            if (!chains->Find("RightHead"))
+                ReparentRename(prefab, "BurstSliderHeadDotRight", chains, "RightHead");
+        }
+    }
+
+    // Debris: modern models already have a Debris container with LeftDebris/
+    // RightDebris inside it; older ones put those straight on the prefab.
+    if (!prefab->Find("Debris") && prefab->Find("LeftDebris") && prefab->Find("RightDebris")) {
+        auto debris = UnityEngine::GameObject::New_ctor("Debris")->transform;
+        debris->SetParent(prefab, false);
+        prefab->Find("LeftDebris")->SetParent(debris, false);
+        prefab->Find("RightDebris")->SetParent(debris, false);
+    }
+
+    // Make sure the legacy flat names are gone even if a model mixed layouts.
+    Rename(prefab, "NoteLeft", "LeftArrow");
+    Rename(prefab, "NoteRight", "RightArrow");
+    Rename(prefab, "NoteDotLeft", "LeftDot");
+    Rename(prefab, "NoteDotRight", "RightDot");
 }
 
 static void CreateChain(UnityEngine::Transform* parent, UnityEngine::Transform* base, std::string const& name, bool link, bool debris) {
@@ -150,6 +230,10 @@ static void CreateChains(UnityEngine::Transform* prefab, CustomModels::NoteInfo&
     logger.debug("creating chains");
 
     auto notes = prefab->Find("Notes");
+    if (!notes) {
+        logger.error("no notes found, cannot create chains");
+        return;
+    }
 
     auto chains = prefab->Find("Chains");
     if (!chains) {
@@ -210,7 +294,8 @@ static void DuplicateForMirror(UnityEngine::Transform* prefab, std::string const
 
     auto base = prefab->Find(baseName);
     if (!base) {
-        logger.error("base object {} for mirror not found", baseName);
+        // Not every model has every part (a model without a bomb has no bomb to
+        // mirror); a missing optional part is not an error.
         return;
     }
 
@@ -269,8 +354,9 @@ std::string CustomModels::Note::ObjectName() {
 
 void CustomModels::Note::PostLoad() {
     auto prefab = asset.asset->transform;
-    if (info.isLegacy)
-        FixLegacyObjects(prefab);
+    if (info.fromPc)
+        DisableInstancing(asset.asset);
+    NormalizeHierarchy(prefab);
     if (!info.hasSlider)
         CreateChains(prefab, info);
     if (info.isMirrorable)

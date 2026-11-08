@@ -1,0 +1,73 @@
+#pragma once
+
+// Unity asset bundle (PC -> Quest) converter.
+//
+// Beat Saber on Quest runs Android/ARM64 Unity. A bundle built for
+// StandaloneWindows/StandaloneWindows64 cannot be loaded by that runtime:
+// AssetBundle::LoadFromFile either returns null or enumerates no assets -- the
+// "experimental Windows bundle doesn't have any assets" symptom. The one field
+// that makes a bundle platform-specific at load time is m_TargetPlatform inside
+// every SerializedFile, so conversion retargets it to Android and repacks the
+// archive uncompressed. Block-compressed textures (DXT/BC) also have their
+// m_IsReadable flag set so their CPU copy survives load.
+//
+// Conversion is delegated to the vendored Vivify bundle converter
+// (src/vivify), which retargets every SerializedFile, cross-compiles the
+// DirectX shader bytecode to GLSL ES, and marks block-compressed textures
+// readable so the mod can decode them to RGBA32 at load time (see
+// loading.cpp). Meshes, prefabs and GameObject hierarchies come through intact.
+//
+// This module is deliberately free of Unity/il2cpp dependencies so it can be
+// reviewed and unit-tested on a host compiler.
+
+#include <filesystem>
+#include <string>
+#include <vector>
+
+namespace CustomModels::Converter {
+
+// Kind of PC model, used to pick the Quest output container and load category.
+enum class PcModelType {
+    Saber,   // .saber  -> .whacker  (Sabers/)
+    Block,   // .bloq/.pixie -> .cyoob (Notes/)
+    Unknown, // not a recognised PC model extension
+};
+
+PcModelType PcModelTypeFromExtension(std::string const& ext);
+// Quest container extension for a PC model type (.whacker / .cyoob).
+std::string QuestExtensionFor(PcModelType type);
+
+// True when the file at path begins with the UnityFS archive signature, i.e. it
+// is a PC standalone asset bundle rather than a Quest zip container.
+bool IsPcModelBundle(std::string const& path);
+
+// Outcome of a conversion.
+struct ConvertResult {
+    bool ok = false;
+    std::string message;
+    uint64_t outputBytes = 0;
+};
+
+// Convert one PC UnityFS bundle into an Android-targeted, uncompressed UnityFS
+// bundle written to destPath. Returns AlreadyAndroid-like success when nothing
+// needed changing. destPath is only created on success.
+ConvertResult ConvertBundleToAndroid(std::string const& sourcePath, std::string const& destPath);
+
+// Convert one PC model file into a Quest-format zip (.whacker/.cyoob/.box)
+// placed next to the source (same stem, Quest extension). The zip contains the
+// converted model.bundle, a package.json descriptor and a thumbnail.png.
+// Returns the path to the written zip in message when ok.
+ConvertResult ConvertPcModelToQuest(std::string const& sourcePath,
+                                    std::filesystem::path const& destFolder,
+                                    PcModelType type);
+
+// Convert every PC model bundle found under directory (recursively) into Quest
+// format, removing the source PC files as they are converted. Reports counts.
+struct BatchResult {
+    int converted = 0;
+    int failed = 0;
+    std::vector<std::string> errors;
+};
+BatchResult ConvertDirectoryModels(std::filesystem::path const& directory);
+
+}  // namespace CustomModels::Converter

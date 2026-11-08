@@ -21,6 +21,8 @@
 #include "utils.hpp"
 #include "wall.hpp"
 #include "zip.hpp"
+#include "beatsaber-hook/shared/utils/utils.h"
+#include "converter.hpp"
 
 DEFINE_TYPE(CustomModels, SettingsCoordinator);
 DEFINE_TYPE(CustomModels, ModSettings);
@@ -290,6 +292,27 @@ void SelectionSettings::confirmDeleteClicked() {
     PreviewSettings::GetInstance()->Refresh(true);
     if (SettingsCoordinator::GetInstance()->modelType == 0 && SettingsCoordinator::GetInstance()->menuPointer)
         DestroyMenuPointers();
+}
+
+void SelectionSettings::convertAllClicked() {
+    std::filesystem::path dataFolder = getDataDir(MOD_ID);
+
+    int converted = 0;
+    int failed = 0;
+    std::vector<std::string> errors;
+    for (auto const& subfolder : {"Sabers", "Notes", "Walls", "Legacy"}) {
+        auto result = CustomModels::Converter::ConvertDirectoryModels(dataFolder / subfolder);
+        converted += result.converted;
+        failed += result.failed;
+        errors.insert(errors.end(), result.errors.begin(), result.errors.end());
+    }
+
+    logger.info("PC model conversion: {} converted, {} failed", converted, failed);
+    for (auto const& e : errors)
+        logger.error("  {}", e);
+
+    RefreshModelList(true);
+    LoadSelections([]() { PreviewSettings::GetInstance()->Refresh(true); });
 }
 
 void ModSettings::DidActivate(bool firstActivation, bool, bool) {

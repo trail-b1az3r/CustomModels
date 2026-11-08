@@ -46,6 +46,8 @@ add_library(
 )
 
 target_include_directories(${COMPILE_ID} PRIVATE ${INCLUDE_DIR})
+# vendored, Unity-free asset bundle converter (shader translation + texture flags)
+target_include_directories(${COMPILE_ID} PRIVATE ${INCLUDE_DIR}/vivify)
 
 target_link_libraries(${COMPILE_ID} PRIVATE -llog)
 

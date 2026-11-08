@@ -21,6 +21,10 @@ namespace CustomModels {
         VALUE_DEFAULT(bool, hasTrail, false);
         VALUE_DEFAULT(bool, keepFakeGlow, false);
         VALUE_DEFAULT(bool, isLegacy, false);
+        // Set on models this mod converted from a PC bundle: their shaders are
+        // cross-compiled, and the translated instancing variants misplace
+        // copies on Quest, so instancing is turned off before use.
+        VALUE_DEFAULT(bool, fromPc, false);
     };
 
     DECLARE_JSON_STRUCT(NoteInfo) {
@@ -32,6 +36,7 @@ namespace CustomModels {
         VALUE_DEFAULT(bool, showArrows, false);
         VALUE_DEFAULT(bool, isMirrorable, false);
         VALUE_DEFAULT(bool, isLegacy, false);
+        VALUE_DEFAULT(bool, fromPc, false);
     };
 
     DECLARE_JSON_STRUCT(WallInfo) {

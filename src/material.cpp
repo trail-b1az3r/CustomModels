@@ -126,3 +126,22 @@ void CustomModels::ClearMaterialsCache() {
     replacements.clear();
     allMaterials = nullptr;
 }
+
+void CustomModels::DisableInstancing(UnityEngine::GameObject* object) {
+    if (!object)
+        return;
+
+    int disabled = 0;
+    for (auto renderer : object->GetComponentsInChildren<UnityEngine::Renderer*>(true)) {
+        if (!renderer)
+            continue;
+        for (auto material : renderer->sharedMaterials) {
+            if (!material || !material->enableInstancing)
+                continue;
+            material->enableInstancing = false;
+            disabled++;
+        }
+    }
+    if (disabled > 0)
+        logger.info("disabled GPU instancing on {} converted material(s)", disabled);
+}

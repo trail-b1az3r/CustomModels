@@ -32,4 +32,9 @@ namespace CustomModels {
 
     void ReplaceMaterials(UnityEngine::GameObject* object);
     void ClearMaterialsCache();
+
+    // Cross-compiled PC shaders have instancing variants that misplace every
+    // copy but one on Quest, where Beat Saber batches notes as instanced draws.
+    // Turning instancing off makes each object draw through the plain variant.
+    void DisableInstancing(UnityEngine::GameObject* object);
 }

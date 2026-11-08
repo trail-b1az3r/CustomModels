@@ -162,6 +162,8 @@ std::string CustomModels::Saber::ObjectName() {
 void CustomModels::Saber::PostLoad() {
     leftTrails.clear();
     rightTrails.clear();
+    if (info.fromPc)
+        DisableInstancing(asset.asset);
     if (info.hasTrail)
         info.isLegacy ? FindLegacyTrails(asset.bundle, asset.asset, *this) : FindTrails(asset.asset, *this);
 }

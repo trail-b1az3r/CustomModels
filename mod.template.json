@@ -25,6 +25,18 @@
       "destination": "/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Walls/"
     },
     {
+      "extension": "saber",
+      "destination": "/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Sabers/"
+    },
+    {
+      "extension": "bloq",
+      "destination": "/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Notes/"
+    },
+    {
+      "extension": "pixie",
+      "destination": "/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Notes/"
+    },
+    {
       "extension": "qsaber",
       "destination": "/sdcard/ModData/com.beatgames.beatsaber/Mods/CustomModels/Legacy/"
     },
