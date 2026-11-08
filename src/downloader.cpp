@@ -141,7 +141,7 @@ namespace {
 
         auto request = UnityEngine::Networking::UnityWebRequest::Get(item->downloadUrl);
         request->SendWebRequest()->add_completed(BEATMODS_REQUEST_COMPLETED([request, item, onLoaded](UnityEngine::AsyncOperation*) {
-            if (request->isNetworkError() || request->isHttpError()) {
+            if (request->get_responseCode() == 0 || request->get_responseCode() >= 400) {
                 logger.error("BeatMods download failed for {}: {}", item->name, request->get_error());
                 return;
             }
