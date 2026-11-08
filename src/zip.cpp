@@ -5,6 +5,8 @@
 #include "metacore/shared/strings.hpp"
 #include "zip/shared/zip.h"
 
+#include <cctype>
+
 static std::string ReadFileInternal(zip* zip, int index) {
     struct zip_stat stat;
     std::string ret;
@@ -63,7 +65,9 @@ bool CustomModels::ExtractAllLegacyAssets(std::string const& path, std::string c
         if (!rawName)
             continue;
         std::filesystem::path const entryPath(rawName);
-        auto const extension = entryPath.extension().string();
+        auto extension = entryPath.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (extension != ".qsaber" && extension != ".qbloq" && extension != ".qwall")
             continue;
 
