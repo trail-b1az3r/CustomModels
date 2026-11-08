@@ -19,6 +19,6 @@ No custom models are available by default, but can instead be downloaded from th
 
 (Due to conflicts with custom songs, zip files cannot be uploaded into MBF, but can still be placed into the folder manually if desired.)
 
-PC `.saber` conversion creates both a `.whacker` saber and a separate `.weeeeeeeeeeeeeeeeeeeee` trail-selection package. The trail package is selectable in the Trail and Menu Trail lists; it keeps the Unity bundle dependencies intact so trail materials and endpoint transforms remain valid.
+PC `.saber` conversion creates both a `.whacker` saber and a separate `.weeeeeeeeeeeeeeeeeeeee` trail-selection package. The trail package is selectable in the Trail and Menu Trail lists; it references the paired `.whacker` bundle, keeping trail materials and endpoint transforms valid without storing or loading a second copy of the bundle.
 
 After uploading model files, they can be selected and tweaked through the "Custom Models" mod tab, located directly to the left of the main menu.
