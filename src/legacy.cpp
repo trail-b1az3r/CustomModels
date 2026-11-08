@@ -10,6 +10,9 @@
 #include "metacore/shared/strings.hpp"
 #include "zip.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 static void ExtractZipFiles(std::filesystem::path destination) {
     std::filesystem::path folder = getDataDir(MOD_ID);
     folder /= "Zips";
@@ -77,7 +80,12 @@ static bool WriteZip(
     std::vector<std::pair<std::string, std::string>> files;
 
     LoadThumbnail(bundle, manifest.descriptor, files);
-    files.emplace_back(manifest.androidFileName, readfile(bundlePath.string()));
+    auto const bundleBytes = readfile(bundlePath.string());
+    if (bundleBytes.empty()) {
+        logger.error("legacy AssetBundle {} is empty or unreadable", bundlePath.string());
+        return false;
+    }
+    files.emplace_back(manifest.androidFileName, bundleBytes);
     files.emplace_back("package.json", WriteToString(manifest));
 
     std::string name = MetaCore::Strings::UniqueFileName(file, folder);
@@ -226,7 +234,9 @@ void CustomModels::ConvertLegacyModels() {
         if (entry.is_directory())
             continue;
         try {
-            std::string extension = entry.path().extension();
+            std::string extension = entry.path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             bool converted = false;
             if (extension == ".qsaber")
                 converted = ConvertQSaber(entry.path());
