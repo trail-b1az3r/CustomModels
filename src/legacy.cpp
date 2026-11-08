@@ -10,6 +10,9 @@
 #include "metacore/shared/strings.hpp"
 #include "zip.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 static void ExtractZipFiles(std::filesystem::path destination) {
     std::filesystem::path folder = getDataDir(MOD_ID);
     folder /= "Zips";
@@ -67,7 +70,7 @@ LoadThumbnail(UnityEngine::AssetBundle* bundle, CustomModels::Descriptor& descri
     files.emplace_back(descriptor.coverImage, std::string(bytes.begin(), bytes.end()));
 }
 
-static void WriteZip(
+static bool WriteZip(
     UnityEngine::AssetBundle* bundle,
     CustomModels::Manifest& manifest,
     std::filesystem::path const& bundlePath,
@@ -77,13 +80,23 @@ static void WriteZip(
     std::vector<std::pair<std::string, std::string>> files;
 
     LoadThumbnail(bundle, manifest.descriptor, files);
-    files.emplace_back(manifest.androidFileName, readfile(bundlePath.string()));
+    auto const bundleBytes = readfile(bundlePath.string());
+    if (bundleBytes.empty()) {
+        logger.error("legacy AssetBundle {} is empty or unreadable", bundlePath.string());
+        return false;
+    }
+    files.emplace_back(manifest.androidFileName, bundleBytes);
     files.emplace_back("package.json", WriteToString(manifest));
 
     std::string name = MetaCore::Strings::UniqueFileName(file, folder);
-    CustomModels::WriteZipFile(folder / name, files);
+    auto const output = folder / name;
+    if (!CustomModels::WriteZipFile(output.string(), files)) {
+        logger.error("failed to write converted legacy model {}", output.string());
+        return false;
+    }
 
     logger.info("converted {} to {}", bundlePath.filename().string(), name);
+    return true;
 }
 
 template <class T>
@@ -131,9 +144,9 @@ static bool ConvertQSaber(std::filesystem::path const& path) {
     }
     manifest.config = LoadSaberConfig(bundle);
 
-    WriteZip(bundle, manifest, path, folder, output);
+    bool const written = WriteZip(bundle, manifest, path, folder, output);
     bundle->Unload(true);
-    return true;
+    return written;
 }
 
 static CustomModels::NoteInfo LoadNoteConfig(UnityEngine::AssetBundle* bundle) {
@@ -165,9 +178,9 @@ static bool ConvertQBloq(std::filesystem::path const& path) {
     }
     manifest.config = LoadNoteConfig(bundle);
 
-    WriteZip(bundle, manifest, path, folder, output);
+    bool const written = WriteZip(bundle, manifest, path, folder, output);
     bundle->Unload(true);
-    return true;
+    return written;
 }
 
 static CustomModels::WallInfo LoadWallConfig(UnityEngine::AssetBundle* bundle) {
@@ -202,9 +215,9 @@ static bool ConvertQWall(std::filesystem::path const& path) {
     }
     manifest.config = LoadWallConfig(bundle);
 
-    WriteZip(bundle, manifest, path, folder, output);
+    bool const written = WriteZip(bundle, manifest, path, folder, output);
     bundle->Unload(true);
-    return true;
+    return written;
 }
 
 void CustomModels::ConvertLegacyModels() {
@@ -221,7 +234,9 @@ void CustomModels::ConvertLegacyModels() {
         if (entry.is_directory())
             continue;
         try {
-            std::string extension = entry.path().extension();
+            std::string extension = entry.path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             bool converted = false;
             if (extension == ".qsaber")
                 converted = ConvertQSaber(entry.path());

@@ -1,0 +1,26 @@
+name: Converter CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  converter-tests:
+    name: Host converter tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure converter tests
+        run: cmake -S tests -B build/converter-tests -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build converter tests
+        run: cmake --build build/converter-tests --parallel 2
+
+      - name: Run converter tests
+        run: ctest --test-dir build/converter-tests --output-on-failure
