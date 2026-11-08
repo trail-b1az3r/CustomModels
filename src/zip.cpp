@@ -5,6 +5,7 @@
 #include "metacore/shared/strings.hpp"
 #include "zip/shared/zip.h"
 
+#include <algorithm>
 #include <cctype>
 
 static std::string ReadFileInternal(zip* zip, int index) {
