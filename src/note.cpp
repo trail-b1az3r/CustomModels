@@ -454,9 +454,13 @@ static void ColorChildNotes(UnityEngine::Transform* parent, bool chain) {
     auto const& names = chain ? ChainChildren : NoteChildren;
     for (int i = 0; i < names.size(); i++) {
         auto child = parent->Find(names[i]);
-        if (child)
+        if (child) {
+            // The preview has no NoteController to raise didInitEvent, so the
+            // gameplay NoteVisuals component never chooses a variant. Show each
+            // available variant explicitly in the menu preview.
+            child->gameObject->active = true;
             child->gameObject->AddComponent<CustomModels::ColorVisuals*>()->SetMenuColor(i % 2 == 0);
-        else
+        } else
             logger.warn("child {} not found", names[i]);
     }
 }
