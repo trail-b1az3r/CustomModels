@@ -45,7 +45,8 @@ std::string MakePackageJson(std::string const& objectName, std::string const& au
     };
     return "{\n"
            "  \"androidFileName\": \"" +
-           escape(androidFileName) + "\",\n"
+           escape(androidFileName) + "\",\n" +
+           (bundleSource.empty() ? "" : "  \"bundleSource\": \"" + escape(bundleSource) + "\",\n") +
            "  \"descriptor\": {\n"
            "    \"author\": \"" +
            escape(author) + "\",\n"
