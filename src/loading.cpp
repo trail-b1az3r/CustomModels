@@ -390,7 +390,7 @@ void CustomModels::Asset::Load(std::string file, std::string assetName, std::fun
 
         BSML::MainThreadScheduler::ScheduleUntil(
             [request]() { return request->isDone; },
-            [this, bundle, request = SafePtr(request), assetName, resolved, file, onDone]() {
+            [this, bundle, request = SafePtr(request), assetName, resolved, file, bundleFile, onDone]() {
                 if (file != loadingFile) {
                     onDone(false, false);
                     return;
