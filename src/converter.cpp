@@ -6,6 +6,8 @@
 #include "zip.hpp"
 
 #include <cstring>
+#include <chrono>
+#include <cctype>
 #include <fstream>
 #include <set>
 #include <string>
@@ -124,6 +126,10 @@ bool IsPcModelBundle(std::string const& path) {
 
 ConvertResult ConvertBundleToAndroid(std::string const& sourcePath, std::string const& destPath) {
     ConvertResult result;
+    if (!IsPcModelBundle(sourcePath)) {
+        result.message = "source is not a UnityFS AssetBundle";
+        return result;
+    }
 
     Vivify::BundleConvert::ShaderConversionOptions options;
     // Beat Saber on Quest draws everything through the two eye cameras, so the
@@ -164,7 +170,14 @@ ConvertResult ConvertBundleToAndroid(std::string const& sourcePath, std::string 
     }
 
     std::error_code ec;
-    result.outputBytes = static_cast<uint64_t>(std::filesystem::file_size(destPath, ec));
+    auto const size = std::filesystem::file_size(destPath, ec);
+    if (ec || size == 0) {
+        result.ok = false;
+        result.message = "converter reported success but produced no readable output bundle";
+        std::filesystem::remove(destPath, ec);
+        return result;
+    }
+    result.outputBytes = static_cast<uint64_t>(size);
     return result;
 }
 
@@ -175,73 +188,128 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
         result.message = "unrecognised PC model extension";
         return result;
     }
+    if (!IsPcModelBundle(sourcePath)) {
+        result.message = "source is not a UnityFS AssetBundle";
+        return result;
+    }
 
+    std::filesystem::path convertedBundle;
+    std::filesystem::path temporaryQuest;
     try {
         std::error_code ec;
         std::filesystem::create_directories(destFolder, ec);
-
-        std::string const convertedBundle = (destFolder / "_converted.bundle").string();
-        result = ConvertBundleToAndroid(sourcePath, convertedBundle);
-        if (!result.ok) {
-            std::filesystem::remove(convertedBundle, ec);
+        if (ec) {
+            result.message = "could not create destination directory: " + ec.message();
             return result;
         }
+
+        // A fixed _converted.bundle name collides when multiple models are
+        // converted in one batch (or two conversion requests overlap).
+        auto const nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        convertedBundle = destFolder / (std::filesystem::path(sourcePath).stem().string() +
+                                         ".converted-" + std::to_string(nonce) + ".bundle");
+        result = ConvertBundleToAndroid(sourcePath, convertedBundle.string());
+        if (!result.ok)
+            return result;
 
         std::string const stem = UniqueStem(std::filesystem::path(sourcePath).stem().string(), destFolder,
                                             QuestExtensionFor(type));
-        std::string const objectName = stem;
         std::string const androidFileName = "model.bundle";
-        std::string const packageJson = MakePackageJson(objectName, "- PC model -", "Converted from PC bundle",
+        std::string const packageJson = MakePackageJson(stem, "- PC model -", "Converted from PC bundle",
                                                         androidFileName, ConfigFor(type));
 
+        auto bundleBytes = readfile(convertedBundle.string());
+        if (bundleBytes.empty()) {
+            result.ok = false;
+            result.message = "converted UnityFS bundle is empty or unreadable";
+            return result;
+        }
+
         std::vector<std::pair<std::string, std::string>> files;
-        files.emplace_back(androidFileName, readfile(convertedBundle));
+        files.emplace_back(androidFileName, std::move(bundleBytes));
         files.emplace_back("package.json", packageJson);
         files.emplace_back("thumbnail.png", DefaultThumbnailPng());
 
-        std::string const outputName = objectName + QuestExtensionFor(type);
+        std::string const outputName = stem + QuestExtensionFor(type);
         std::filesystem::path const outputPath = destFolder / outputName;
-        std::error_code zipEc;
-        std::filesystem::remove(outputPath, zipEc);
-        WriteZipFile(outputPath.string(), files);
+        temporaryQuest = outputPath.string() + ".tmp";
+        std::filesystem::remove(temporaryQuest, ec);
+        if (!WriteZipFile(temporaryQuest.string(), files)) {
+            result.ok = false;
+            result.message = "could not create a valid Quest model archive";
+            return result;
+        }
 
-        std::filesystem::remove(convertedBundle, ec);
-        if (!std::filesystem::exists(outputPath, ec)) {
-            result.message = "converted bundle written but quest zip was not created";
+        // Rename only after the complete zip has closed successfully. The
+        // original PC file is removed by the batch caller only after this.
+        std::filesystem::rename(temporaryQuest, outputPath, ec);
+        if (ec) {
+            result.ok = false;
+            result.message = "could not finalize Quest model archive: " + ec.message();
+            return result;
+        }
+
+        auto const outputSize = std::filesystem::file_size(outputPath, ec);
+        if (ec || outputSize == 0) {
+            result.ok = false;
+            result.message = "Quest model archive is empty or unreadable";
+            std::filesystem::remove(outputPath, ec);
             return result;
         }
         result.ok = true;
-        result.outputBytes = static_cast<uint64_t>(std::filesystem::file_size(outputPath, ec));
+        result.outputBytes = static_cast<uint64_t>(outputSize);
         result.message = "converted to " + outputName;
     } catch (std::exception const& e) {
         result.ok = false;
         result.message = std::string("conversion failed: ") + e.what();
-        std::error_code ec;
-        std::filesystem::remove(destFolder / "_converted.bundle", ec);
     }
+
+    std::error_code cleanup;
+    if (!convertedBundle.empty()) std::filesystem::remove(convertedBundle, cleanup);
+    if (!temporaryQuest.empty()) std::filesystem::remove(temporaryQuest, cleanup);
     return result;
 }
 
 BatchResult ConvertDirectoryModels(std::filesystem::path const& directory) {
     BatchResult result;
     try {
-        if (!std::filesystem::exists(directory)) return result;
-        std::set<std::string> const pcExtensions = {".saber", ".bloq", ".pixie"};
+        if (!std::filesystem::exists(directory) || !std::filesystem::is_directory(directory))
+            return result;
+
+        // Snapshot candidates before writing outputs. This avoids walking newly
+        // created Quest archives during the same recursive directory scan.
+        std::vector<std::filesystem::path> candidates;
         for (auto const& entry : std::filesystem::recursive_directory_iterator(directory)) {
-            if (entry.is_directory()) continue;
-            auto const& path = entry.path();
-            auto const ext = path.extension().string();
-            if (!pcExtensions.contains(ext)) continue;
+            if (!entry.is_regular_file())
+                continue;
+            auto ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (ext == ".saber" || ext == ".bloq" || ext == ".pixie")
+                candidates.emplace_back(entry.path());
+        }
+
+        for (auto const& path : candidates) {
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
             if (!IsPcModelBundle(path.string())) {
-                result.errors.emplace_back(path.string() + ": not a UnityFS bundle");
+                result.errors.emplace_back(path.string() + ": not a readable UnityFS bundle");
                 result.failed++;
                 continue;
             }
+
             PcModelType const type = PcModelTypeFromExtension(ext);
             auto const out = ConvertPcModelToQuest(path.string(), directory, type);
             if (out.ok) {
                 std::error_code ec;
                 std::filesystem::remove(path, ec);
+                if (ec) {
+                    result.failed++;
+                    result.errors.emplace_back(path.string() + ": converted, but source could not be removed: " + ec.message());
+                    logger.error("converted {}, but could not remove source: {}", path.string(), ec.message());
+                    continue;
+                }
                 result.converted++;
                 logger.info("converted {} to {}", path.filename().string(), out.message);
             } else {
@@ -251,7 +319,8 @@ BatchResult ConvertDirectoryModels(std::filesystem::path const& directory) {
             }
         }
     } catch (std::exception const& e) {
-        result.errors.emplace_back(std::string("scan failed: ") + e.what());
+        result.errors.emplace_back(std::string("scan/conversion failed: ") + e.what());
+        result.failed++;
     }
     return result;
 }
