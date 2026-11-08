@@ -406,7 +406,7 @@ void CustomModels::Asset::Unload() {
 
 std::map<std::string, CustomModels::Manifest> CustomModels::files;
 
-static std::set<std::string> const extensions = {".whacker", ".cyoob", ".box"};
+static std::set<std::string> const extensions = {".whacker", ".weeeeeeeeeeeeeeeeeeeee", ".cyoob", ".box"};
 
 static void LoadManifest(std::string const& file) {
     logger.debug("loading manifest for {}", file);
