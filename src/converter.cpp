@@ -32,7 +32,7 @@ std::string Describe(Vivify::BundleConvert::ShaderConversion const& conversion) 
 // Write a minimal package.json descriptor for a converted Quest model.
 std::string MakePackageJson(std::string const& objectName, std::string const& author,
                             std::string const& description, std::string const& androidFileName,
-                            std::string const& configJson) {
+                            std::string const& configJson, std::string const& bundleSource = "") {
     // Escape backslashes and quotes for safe embedding.
     auto escape = [](std::string const& s) {
         std::string out;
@@ -251,15 +251,10 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
             return result;
         }
 
-        // A trail package gets its own archive and selection entry. The Unity
-        // bundle is retained intact because trail materials, endpoint transforms,
-        // and meshes are linked objects in the original prefab; copying only a
-        // guessed subset would silently break those references. Runtime loads
-        // this archive only in the Trail/Menu Trail slot, never as a saber model.
-        std::string trailBundleBytes;
-        if (type == PcModelType::Saber)
-            trailBundleBytes = bundleBytes;
-
+        // A trail package gets its own lightweight archive and selection entry.
+        // It references the paired .whacker bundle instead of duplicating it:
+        // trail meshes, materials, and endpoint transforms remain valid, while
+        // both selections share the same loaded Unity AssetBundle at runtime.
         std::vector<std::pair<std::string, std::string>> files;
         files.emplace_back(androidFileName, std::move(bundleBytes));
         files.emplace_back("package.json", packageJson);
@@ -299,11 +294,10 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
             std::filesystem::remove(temporaryTrail, ec);
 
             std::vector<std::pair<std::string, std::string>> trailFiles;
-            trailFiles.emplace_back("trail.bundle", std::move(trailBundleBytes));
             trailFiles.emplace_back("package.json",
                 MakePackageJson(stem + " Trail", "- PC model -",
-                                "Trail-only selection package; keeps referenced Unity trail assets together",
-                                "trail.bundle", TrailPackageConfig()));
+                                "Trail-only selector linked to its paired saber bundle",
+                                "model.bundle", TrailPackageConfig(), outputName));
             trailFiles.emplace_back("thumbnail.png", DefaultThumbnailPng());
 
             if (!WriteZipFile(temporaryTrail.string(), trailFiles)) {
