@@ -162,8 +162,9 @@ std::string CustomModels::Saber::ObjectName() {
 void CustomModels::Saber::PostLoad() {
     leftTrails.clear();
     rightTrails.clear();
-    if (info.fromPc)
-        DisableInstancing(asset.asset);
+    // Keep GPU instancing enabled on imported materials. Disabling it here
+    // mutates shared bundle materials globally and can turn otherwise batched
+    // custom models into many individual draw calls.
     if (info.hasTrail)
         info.isLegacy ? FindLegacyTrails(asset.bundle, asset.asset, *this) : FindTrails(asset.asset, *this);
 }
