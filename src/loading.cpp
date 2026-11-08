@@ -344,10 +344,31 @@ void CustomModels::Asset::Load(std::string file, std::string assetName, std::fun
 
     logger.info("getting asset {} for {}", assetName, file);
     Unload();
+
+    // Trail sidecars point at their paired .whacker package. Resolve only a
+    // plain sibling filename so a manifest cannot escape the model directory.
+    std::string bundleFile = file;
+    auto const& sourceName = files[file].bundleSource;
+    if (!sourceName.empty()) {
+        std::filesystem::path const sourcePath(sourceName);
+        if (sourcePath.has_parent_path() || sourcePath.filename() != sourcePath) {
+            logger.error("invalid bundleSource '{}' in {}", sourceName, file);
+            onDone(false, true);
+            return;
+        }
+        bundleFile = (std::filesystem::path(file).parent_path() / sourcePath).string();
+        if (!files.contains(bundleFile)) {
+            logger.error("trail package {} references missing saber package {}", file, bundleFile);
+            onDone(false, true);
+            return;
+        }
+    }
+
     loadingFile = file;
+    loadingBundleFile = bundleFile;
 
     // nesting callbacks is definitely annoying, but a coroutine would be too
-    AddLoad(file, [this, file, assetName, onDone](UnityEngine::AssetBundle* bundle) {
+    AddLoad(bundleFile, [this, file, bundleFile, assetName, onDone](UnityEngine::AssetBundle* bundle) {
         if (file != loadingFile) {
             onDone(false, false);
             return;
@@ -355,7 +376,8 @@ void CustomModels::Asset::Load(std::string file, std::string assetName, std::fun
         if (!bundle) {
             logger.error("failed to load asset bundle for {}", file);
             loadingFile = "";
-            RemoveLoad(file);
+            RemoveLoad(bundleFile);
+            loadingBundleFile = "";
             onDone(false, true);
             return;
         }
@@ -376,7 +398,9 @@ void CustomModels::Asset::Load(std::string file, std::string assetName, std::fun
 
                 logger.debug("finished loading asset {} for {}", resolved, file);
                 currentFile = file;
+                currentBundleFile = bundleFile;
                 loadingFile = "";
+                loadingBundleFile = "";
 
                 this->bundle = bundle;
                 if (auto object = request->asset.try_cast<UnityEngine::GameObject>()) {
@@ -394,12 +418,14 @@ void CustomModels::Asset::Load(std::string file, std::string assetName, std::fun
 
 void CustomModels::Asset::Unload() {
     logger.info("removing reference to {} (and {})", currentFile, loadingFile);
-    if (!loadingFile.empty())
-        RemoveLoad(loadingFile);
-    if (!currentFile.empty())
-        RemoveLoad(currentFile);
+    if (!loadingBundleFile.empty())
+        RemoveLoad(loadingBundleFile);
+    if (!currentBundleFile.empty())
+        RemoveLoad(currentBundleFile);
     loadingFile = "";
     currentFile = "";
+    loadingBundleFile = "";
+    currentBundleFile = "";
     bundle = nullptr;
     asset = nullptr;
 }
