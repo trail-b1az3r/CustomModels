@@ -308,8 +308,10 @@ static void RefreshListItems(int modelType, bool trail, bool menu) {
     auto unsorted = listItems.size();
 
     auto remove = StoredCovers();
+    std::string const wantedExtension =
+        modelType == 0 && trail ? ".weeeeeeeeeeeeeeeeeeeee" : Extensions[modelType];
     for (auto const& [file, _] : CustomModels::files) {
-        if (!file.ends_with(Extensions[modelType]))
+        if (!file.ends_with(wantedExtension))
             continue;
         listItems.emplace_back(new FileListItem(file));
         remove.erase(file);
