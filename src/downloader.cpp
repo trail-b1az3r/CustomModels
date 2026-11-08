@@ -23,8 +23,8 @@ namespace {
     using namespace CustomModels;
 
     using RequestCallback = System::Action_1<UnityEngine::AsyncOperation*>*;
-#define BEATMODS_REQUEST_COMPLETED(Func) \
-    custom_types::MakeDelegate<RequestCallback>(classof(RequestCallback), static_cast<std::function<void(UnityEngine::AsyncOperation*)>>(Func))
+#define BEATMODS_REQUEST_COMPLETED(...) \
+    custom_types::MakeDelegate<RequestCallback>(classof(RequestCallback), static_cast<std::function<void(UnityEngine::AsyncOperation*)>>(__VA_ARGS__))
 
     constexpr char kApiBase[] = "https://beatmods.com/api/v3/assets";
 
@@ -86,7 +86,7 @@ namespace {
     bool HasTrailTag(rapidjson::Value const& asset) {
         if (!asset.IsObject() || !asset.HasMember("tags") || !asset["tags"].IsArray())
             return false;
-        for (auto const& tag : asset["tags"])
+        for (auto const& tag : asset["tags"].GetArray())
             if (tag.IsString() && std::string(tag.GetString()) == "CustomTrails")
                 return true;
         return false;
@@ -140,7 +140,6 @@ namespace {
         }
 
         auto request = UnityEngine::Networking::UnityWebRequest::Get(item->downloadUrl);
-        request->SetRequestHeader("User-Agent", std::string(MOD_ID) + " " + VERSION);
         request->SendWebRequest()->add_completed(BEATMODS_REQUEST_COMPLETED([request, item, onLoaded](UnityEngine::AsyncOperation*) {
             if (request->isNetworkError() || request->isHttpError()) {
                 logger.error("BeatMods download failed for {}: {}", item->name, request->get_error());
@@ -216,8 +215,6 @@ void CustomModels::SearchBeatModsAssets(std::string query, int category, bool tr
         url += "&name=" + EncodeQuery(query);
 
     auto request = UnityEngine::Networking::UnityWebRequest::Get(url);
-    request->SetRequestHeader("Accept", "application/json");
-    request->SetRequestHeader("User-Agent", std::string(MOD_ID) + " " + VERSION);
     request->SendWebRequest()->add_completed(BEATMODS_REQUEST_COMPLETED([request, category, trails, callback](UnityEngine::AsyncOperation*) {
         if (request->isNetworkError() || request->isHttpError()) {
             callback({}, "BeatMods API request failed: " + std::string(request->get_error()));
@@ -233,7 +230,7 @@ void CustomModels::SearchBeatModsAssets(std::string query, int category, bool tr
         }
 
         std::vector<ListItem*> results;
-        for (auto const& asset : document["assets"]) {
+        for (auto const& asset : document["assets"].GetArray()) {
             auto type = ReadString(asset, "type");
             if (!IsAllowedType(type, category) || (trails && !HasTrailTag(asset)))
                 continue;
