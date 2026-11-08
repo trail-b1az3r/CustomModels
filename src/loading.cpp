@@ -351,7 +351,8 @@ void CustomModels::Asset::Load(std::string file, std::string assetName, std::fun
     auto const& sourceName = files[file].bundleSource;
     if (!sourceName.empty()) {
         std::filesystem::path const sourcePath(sourceName);
-        if (sourcePath.has_parent_path() || sourcePath.filename() != sourcePath) {
+        if (sourcePath.has_parent_path() || sourcePath.filename() != sourcePath ||
+            sourceName == "." || sourceName == ".." || !sourceName.ends_with(".whacker")) {
             logger.error("invalid bundleSource '{}' in {}", sourceName, file);
             onDone(false, true);
             return;
