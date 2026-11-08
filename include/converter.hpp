@@ -26,6 +26,11 @@
 
 namespace CustomModels::Converter {
 
+// Reserved for a future Unity 6 trail package format. Intentionally not
+// recognized by loaders, scanners, selectors, or converters yet.
+inline constexpr char ReservedUnity6TrailExtension[] = ".qweeeeeeeeeeeeeeeeeeeee";
+
+
 // Kind of PC model, used to pick the Quest output container and load category.
 enum class PcModelType {
     Saber,   // .saber  -> .whacker  (Sabers/)
