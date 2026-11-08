@@ -64,6 +64,14 @@ std::string MakePackageJson(std::string const& objectName, std::string const& au
 // detected at load time where it can be, so these only say what a converted
 // model is guaranteed to be: a custom model (not the game's legacy Quest
 // container format) with all of its own parts.
+std::string TrailPackageConfig() {
+    // The trail selector loads this package as a Saber asset so the existing
+    // TrailInfo/TrailObject discovery path can retain all Unity dependencies.
+    return R"({"hasTrail":true,"keepFakeGlow":false,"isLegacy":false,"fromPc":true})";
+}
+
+constexpr char kTrailPackageExtension[] = ".weeeeeeeeeeeeeeeeeeeee";
+
 std::string ConfigFor(PcModelType type) {
     switch (type) {
         case PcModelType::Saber:
@@ -94,7 +102,13 @@ std::string DefaultThumbnailPng() {
 std::string UniqueStem(std::string const& stem, std::filesystem::path const& folder, std::string const& extension) {
     std::error_code ec;
     std::string candidate = stem;
-    for (int i = 1; std::filesystem::exists(folder / (candidate + extension), ec); i++)
+    auto exists = [&](std::string const& value) {
+        if (std::filesystem::exists(folder / (value + extension), ec))
+            return true;
+        return extension == ".whacker" &&
+               std::filesystem::exists(folder / (value + kTrailPackageExtension), ec);
+    };
+    for (int i = 1; exists(candidate); i++)
         candidate = stem + "_" + std::to_string(i);
     return candidate;
 }
@@ -195,15 +209,18 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
 
     std::filesystem::path convertedBundle;
     std::filesystem::path temporaryQuest;
+    std::filesystem::path temporaryTrail;
     struct TemporaryFiles {
         std::filesystem::path& bundle;
         std::filesystem::path& quest;
+        std::filesystem::path& trail;
         ~TemporaryFiles() {
             std::error_code ec;
             if (!bundle.empty()) std::filesystem::remove(bundle, ec);
             if (!quest.empty()) std::filesystem::remove(quest, ec);
+            if (!trail.empty()) std::filesystem::remove(trail, ec);
         }
-    } cleanup{convertedBundle, temporaryQuest};
+    } cleanup{convertedBundle, temporaryQuest, temporaryTrail};
     try {
         std::error_code ec;
         std::filesystem::create_directories(destFolder, ec);
@@ -234,6 +251,15 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
             return result;
         }
 
+        // A trail package gets its own archive and selection entry. The Unity
+        // bundle is retained intact because trail materials, endpoint transforms,
+        // and meshes are linked objects in the original prefab; copying only a
+        // guessed subset would silently break those references. Runtime loads
+        // this archive only in the Trail/Menu Trail slot, never as a saber model.
+        std::string trailBundleBytes;
+        if (type == PcModelType::Saber)
+            trailBundleBytes = bundleBytes;
+
         std::vector<std::pair<std::string, std::string>> files;
         files.emplace_back(androidFileName, std::move(bundleBytes));
         files.emplace_back("package.json", packageJson);
@@ -258,16 +284,58 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
             return result;
         }
 
-        auto const outputSize = std::filesystem::file_size(outputPath, ec);
+        auto outputSize = std::filesystem::file_size(outputPath, ec);
         if (ec || outputSize == 0) {
             result.ok = false;
             result.message = "Quest model archive is empty or unreadable";
             std::filesystem::remove(outputPath, ec);
             return result;
         }
+
+        if (type == PcModelType::Saber) {
+            std::string const trailName = stem + kTrailPackageExtension;
+            std::filesystem::path const trailPath = destFolder / trailName;
+            temporaryTrail = trailPath.string() + ".tmp";
+            std::filesystem::remove(temporaryTrail, ec);
+
+            std::vector<std::pair<std::string, std::string>> trailFiles;
+            trailFiles.emplace_back("trail.bundle", std::move(trailBundleBytes));
+            trailFiles.emplace_back("package.json",
+                MakePackageJson(stem + " Trail", "- PC model -",
+                                "Trail-only selection package; keeps referenced Unity trail assets together",
+                                "trail.bundle", TrailPackageConfig()));
+            trailFiles.emplace_back("thumbnail.png", DefaultThumbnailPng());
+
+            if (!WriteZipFile(temporaryTrail.string(), trailFiles)) {
+                std::filesystem::remove(outputPath, ec);
+                result.ok = false;
+                result.message = "could not create the standalone trail selection package";
+                return result;
+            }
+            std::filesystem::rename(temporaryTrail, trailPath, ec);
+            if (ec) {
+                std::filesystem::remove(outputPath, ec);
+                result.ok = false;
+                result.message = "could not finalize trail package: " + ec.message();
+                return result;
+            }
+
+            auto const trailSize = std::filesystem::file_size(trailPath, ec);
+            if (ec || trailSize == 0) {
+                std::filesystem::remove(outputPath, ec);
+                std::filesystem::remove(trailPath, ec);
+                result.ok = false;
+                result.message = "trail package is empty or unreadable";
+                return result;
+            }
+            outputSize += trailSize;
+            result.message = "converted to " + outputName + " and " + trailName;
+        } else {
+            result.message = "converted to " + outputName;
+        }
+
         result.ok = true;
         result.outputBytes = static_cast<uint64_t>(outputSize);
-        result.message = "converted to " + outputName;
     } catch (std::exception const& e) {
         result.ok = false;
         result.message = std::string("conversion failed: ") + e.what();
