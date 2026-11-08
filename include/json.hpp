@@ -60,6 +60,7 @@ namespace CustomModels {
 
     DECLARE_JSON_STRUCT(Manifest) {
         VALUE(std::string, androidFileName);
+        VALUE_DEFAULT(std::string, bundleSource, "");
         VALUE(Descriptor, descriptor);
         VALUE(UnparsedJSON, config);
     };
