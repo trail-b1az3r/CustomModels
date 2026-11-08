@@ -11,7 +11,7 @@
 #include "main.hpp"
 #include "custom-types/shared/delegate.hpp"
 #include "beatsaber-hook/shared/utils/utils.h"
-#include "rapidjson/document.h"
+#include "beatsaber-hook/shared/config/rapidjson-utils.hpp"
 
 #include <algorithm>
 #include <cctype>
