@@ -354,8 +354,8 @@ std::string CustomModels::Note::ObjectName() {
 
 void CustomModels::Note::PostLoad() {
     auto prefab = asset.asset->transform;
-    if (info.fromPc)
-        DisableInstancing(asset.asset);
+    // Preserve imported material instancing; shared materials are used by
+    // multiple note instances and should remain batchable.
     NormalizeHierarchy(prefab);
     if (!info.hasSlider)
         CreateChains(prefab, info);
