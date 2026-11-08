@@ -12,7 +12,7 @@
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
-        std::cerr << "CHECK failed at " << __FILE__ << ":" << __LINE__ << ": " #condition << "\\n"; \
+        std::cerr << "CHECK failed at " << __FILE__ << ":" << __LINE__ << ": " #condition << "\n"; \
         return 1; \
     } \
 } while (false)
