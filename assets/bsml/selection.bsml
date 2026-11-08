@@ -16,7 +16,9 @@
             <tab tags="menuPointer" tab-name="Menu" />
         </horizontal>
         <horizontal spacing="2" pad-top="1" pad-bottom="1" child-expand-width="false" child-align="MiddleCenter">
-            <button text="Convert All PC Models to Quest" hover-hint="Converts PC .saber/.bloq/.pixie bundles into Quest .whacker/.cyoob/.box so they can be used in-game" on-click="convertAllClicked" pref-width="28" />\n            <button text="Browse BeatMods" hover-hint="Search and download public models from BeatMods" on-click="downloadModelsClicked" pref-width="20" />\n            <button text="Local Models" hover-hint="Return to your downloaded and installed models" on-click="localModelsClicked" pref-width="15" />
+            <button text="Convert All PC Models to Quest" hover-hint="Converts PC .saber/.bloq/.pixie bundles into Quest .whacker/.cyoob/.box so they can be used in-game" on-click="convertAllClicked" pref-width="28" />
+            <button text="Browse BeatMods" hover-hint="Search and download public models from BeatMods" on-click="downloadModelsClicked" pref-width="20" />
+            <button text="Local Models" hover-hint="Return to your downloaded and installed models" on-click="localModelsClicked" pref-width="15" />
         </horizontal>
         <list id="modelList" select-cell="modelSelected" stick-scrolling="true" show-scrollbar="true" />
     </vertical>
