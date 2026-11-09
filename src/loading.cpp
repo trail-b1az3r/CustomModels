@@ -51,13 +51,19 @@ static std::map<std::string, BundleReference> bundles;
 
 // removes a reference from an asset, handling any necessary cleanup, returns true if the file is no longer in bundles
 static bool RemoveLoad(std::string const& file) {
-    auto& bundle = bundles[file];
-    if (--bundle.refs != 0)
+    auto it = bundles.find(file);
+    if (it == bundles.end()) {
+        logger.warn("ignoring release for untracked asset bundle {}", file);
+        return true;
+    }
+    if (it->second.refs > 0)
+        --it->second.refs;
+    if (it->second.refs > 0)
         return false;
     logger.debug("unloading asset bundle {}", file);
-    if (bundle.bundle)
-        bundle.bundle->Unload(true);
-    bundles.erase(file);
+    if (it->second.bundle)
+        it->second.bundle->Unload(true);
+    bundles.erase(it);
     return true;
 }
 
@@ -102,10 +108,17 @@ static void AddLoad(std::string const& file, std::function<void(UnityEngine::Ass
 
     if (!present) {
         std::string bytes = CustomModels::ReadFileFromZip(file, CustomModels::files[file].androidFileName);
-        if (!bytes.empty())
+        if (!bytes.empty()) {
             LoadBundle(bytes, file);
-        else
-            onDone(nullptr);
+        } else {
+            logger.error("asset bundle entry '{}' is missing or empty in {}",
+                         CustomModels::files[file].androidFileName, file);
+            // Drain all waiters. Each caller owns one reference and releases it
+            // in its normal failure callback.
+            auto callbacks = std::move(bundle.callbacks);
+            for (auto& callback : callbacks)
+                callback(nullptr);
+        }
     }
 }
 
