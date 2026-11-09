@@ -23,7 +23,6 @@
 #include "zip.hpp"
 #include "beatsaber-hook/shared/utils/utils.h"
 #include "converter.hpp"
-#include "downloader.hpp"
 
 DEFINE_TYPE(CustomModels, SettingsCoordinator);
 DEFINE_TYPE(CustomModels, ModSettings);
@@ -190,9 +189,7 @@ void SelectionSettings::DidActivate(bool firstActivation, bool, bool) {
     if (firstActivation) {
         SetupFields();
         BSML_FILE(selection);
-    } else if (beatModsMode)
-        downloadModelsClicked();
-    else
+    } else
         RefreshModelList(true);
 }
 
@@ -219,14 +216,9 @@ void SelectionSettings::PostParse() {
 }
 
 void SelectionSettings::RefreshModelList(bool full) {
-    if (beatModsMode) {
-        models = beatModsModels;
-        selectedModel = -1;
-    } else {
-        auto pair = GetSelectionOptions(search, full);
-        models = pair.first;
-        selectedModel = pair.second;
-    }
+    auto pair = GetSelectionOptions(search, full);
+    models = pair.first;
+    selectedModel = pair.second;
 
     if (!tableView)
         return;
@@ -240,7 +232,6 @@ void SelectionSettings::RefreshModelList(bool full) {
 }
 
 void SelectionSettings::OnDestroy() {
-    ClearBeatModsAssets(beatModsModels);
     instance = nullptr;
 }
 
@@ -255,10 +246,7 @@ void SelectionSettings::modelTypeSelected(HMUI::SegmentedControl*, int idx) {
     if (layout)
         UnityEngine::UI::LayoutRebuilder::ForceRebuildLayoutImmediate(layout);
     SettingsCoordinator::GetInstance()->modelType = idx;
-    if (beatModsMode)
-        downloadModelsClicked();
-    else
-        RefreshModelList(false);
+    RefreshModelList(false);
     ModSettings::GetInstance()->Refresh();
     PreviewSettings::GetInstance()->Refresh(true);
 }
@@ -269,45 +257,9 @@ void SelectionSettings::searchInputTyped(StringW value) {
         RefreshModelList(false);
 }
 
-void SelectionSettings::downloadModelsClicked() {
-    beatModsMode = true;
-    ClearBeatModsAssets(beatModsModels);
-    models.clear();
-    selectedModel = -1;
-    if (tableView)
-        tableView->ReloadData();
-
-    SearchBeatModsAssets(std::string(search), SettingsCoordinator::GetInstance()->modelType,
-                         SettingsCoordinator::GetInstance()->trail,
-                         [this](std::vector<ListItem*> results, std::string error) {
-        ClearBeatModsAssets(beatModsModels);
-        beatModsModels = std::move(results);
-        models = beatModsModels;
-        selectedModel = -1;
-        if (!error.empty())
-            logger.error("{}", error);
-        logger.info("BeatMods browser returned {} matching assets", beatModsModels.size());
-        if (tableView) {
-            tableView->ReloadData();
-            tableView->ClearSelection();
-        }
-    });
-}
-
-void SelectionSettings::localModelsClicked() {
-    if (!beatModsMode)
-        return;
-    beatModsMode = false;
-    ClearBeatModsAssets(beatModsModels);
-    RefreshModelList(true);
-}
-
 void SelectionSettings::saberOrTrailSelected(HMUI::SegmentedControl*, int idx) {
     SettingsCoordinator::GetInstance()->trail = idx == 1;
-    if (beatModsMode)
-        downloadModelsClicked();
-    else
-        RefreshModelList(false);
+    RefreshModelList(false);
     ModSettings::GetInstance()->Refresh();
 }
 
@@ -322,15 +274,6 @@ void SelectionSettings::modelSelected(HMUI::TableView*, int idx) {
     if (idx < 0 || idx >= static_cast<int>(models.size()))
         return;
     selectedModel = idx;
-    if (beatModsMode) {
-        models[idx]->Select([this]() {
-            beatModsMode = false;
-            ClearBeatModsAssets(beatModsModels);
-            LoadManifests();
-            RefreshModelList(true);
-        });
-        return;
-    }
     models[idx]->Select([]() {
         PreviewSettings::GetInstance()->Refresh(true);
         if (SettingsCoordinator::GetInstance()->modelType == 0 && SettingsCoordinator::GetInstance()->menuPointer)
