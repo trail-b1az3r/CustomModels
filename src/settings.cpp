@@ -253,8 +253,7 @@ void SelectionSettings::modelTypeSelected(HMUI::SegmentedControl*, int idx) {
 
 void SelectionSettings::searchInputTyped(StringW value) {
     search = value;
-    if (!beatModsMode)
-        RefreshModelList(false);
+    RefreshModelList(false);
 }
 
 void SelectionSettings::saberOrTrailSelected(HMUI::SegmentedControl*, int idx) {
