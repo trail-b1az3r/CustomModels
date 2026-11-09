@@ -1,5 +1,7 @@
 #include "selection.hpp"
 
+#include <cctype>
+
 #include "UnityEngine/HideFlags.hpp"
 #include "assets.hpp"
 #include "config.hpp"
@@ -291,6 +293,14 @@ static bool prevMenu;
 static bool prevTrail;
 
 static std::vector<std::string> const Extensions = {".whacker", ".cyoob", ".box"};
+static constexpr char TrailPackageExtension[] = ".weeeeeeeeeeeeeeeeeeeee";
+
+static bool HasExtension(std::string const& file, std::string const& wanted) {
+    auto extension = std::filesystem::path(file).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == wanted;
+}
 
 static void RefreshListItems(int modelType, bool trail, bool menu) {
     for (auto item : listItems)
@@ -308,10 +318,9 @@ static void RefreshListItems(int modelType, bool trail, bool menu) {
     auto unsorted = listItems.size();
 
     auto remove = StoredCovers();
-    std::string const wantedExtension =
-        modelType == 0 && trail ? ".weeeeeeeeeeeeeeeeeeeee" : Extensions[modelType];
+    std::string const wantedExtension = modelType == 0 && trail ? TrailPackageExtension : Extensions[modelType];
     for (auto const& [file, _] : CustomModels::files) {
-        if (!file.ends_with(wantedExtension))
+        if (!HasExtension(file, wantedExtension))
             continue;
         listItems.emplace_back(new FileListItem(file));
         remove.erase(file);

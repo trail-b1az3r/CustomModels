@@ -5,6 +5,7 @@
 #include "bsml/shared/BSML.hpp"
 #include "bsml/shared/BSMLDataCache.hpp"
 #include "config.hpp"
+#include "converter.hpp"
 #include "custom-types/shared/register.hpp"
 #include "defaults.hpp"
 #include "hooks.hpp"
@@ -61,6 +62,20 @@ extern "C" void late_load() {
     // 2. it allows most of the later loading logic to be unified (and it's complicated enough that way)
     CustomModels::ConvertLegacyModels();
     CustomModels::MoveQosmeticsFolders();
+
+    // Older PC-format models can be left in any of the normal model folders
+    // (or Legacy after an upgrade). Convert them before indexing manifests so
+    // both the model and its generated .weeeee... trail entry are available
+    // immediately after launch, without requiring a manual conversion step.
+    std::filesystem::path modelFolder = getDataDir(MOD_ID);
+    for (auto const& subfolder : {"Sabers", "Notes", "Walls", "Legacy"}) {
+        auto result = CustomModels::Converter::ConvertDirectoryModels(modelFolder / subfolder);
+        if (result.converted || result.failed)
+            logger.info("startup conversion in {}: {} converted, {} failed", subfolder, result.converted, result.failed);
+        for (auto const& error : result.errors)
+            logger.warn("startup model conversion: {}", error);
+    }
+
     CustomModels::LoadDefaults();
     CustomModels::LoadManifests();
     CustomModels::LoadSelections();
