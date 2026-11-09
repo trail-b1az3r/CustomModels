@@ -78,6 +78,17 @@ static void LoadBundle(std::string const& bytes, std::string file) {
     logger.debug("loading asset bundle {}", file);
     auto array = ArrayW<uint8_t>({(uint8_t*) bytes.data(), bytes.size()});
     auto request = LoadFromMemoryAsync(array, 0);
+    if (!request) {
+        logger.error("Unity failed to create an asynchronous AssetBundle request for {}", file);
+        RemoveLoad(file); // release the temporary in-flight reference
+        auto it = bundles.find(file);
+        if (it != bundles.end()) {
+            auto callbacks = std::move(it->second.callbacks);
+            for (auto& callback : callbacks)
+                callback(nullptr);
+        }
+        return;
+    }
 
     BSML::MainThreadScheduler::ScheduleUntil(
         [request]() { return request->isDone; },
@@ -466,18 +477,31 @@ static void LoadManifest(std::string const& file) {
     CustomModels::files[file] = manifest;
 }
 
-static void LoadDirectory(std::string const& directory) {
-    logger.debug("loading manifests in {}", directory);
+static void LoadDirectory(std::filesystem::path const& directory) {
+    logger.debug("loading manifests in {}", directory.string());
+    std::error_code ec;
+    if (!std::filesystem::exists(directory, ec) || ec || !std::filesystem::is_directory(directory, ec) || ec) {
+        logger.debug("model directory does not exist yet: {}", directory.string());
+        return;
+    }
 
-    for (auto const& entry : std::filesystem::directory_iterator(directory)) {
-        if (entry.is_directory())
+    for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+        auto const& entry = *it;
+        if (entry.is_directory(ec) || ec)
             continue;
         auto path = entry.path();
-        if (extensions.contains(path.extension()))
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        bool supported = std::any_of(extensions.begin(), extensions.end(),
+                                     [&](std::string const& value) { return value == extension; });
+        if (supported)
             LoadManifest(path);
         else
-            logger.debug("skipping loading manifest for {} due to invalid extension {}", path.string(), path.extension().string());
+            logger.debug("skipping loading manifest for {} due to invalid extension {}", path.string(), extension);
     }
+    if (ec)
+        logger.error("failed while scanning model directory {}: {}", directory.string(), ec.message());
 }
 
 void CustomModels::LoadManifests() {
@@ -485,6 +509,6 @@ void CustomModels::LoadManifests() {
     files.clear();
 
     std::filesystem::path folder = getDataDir(MOD_ID);
-    for (auto& subfolder : {"Sabers", "Notes", "Walls"})
+    for (auto const& subfolder : {"Sabers", "Notes", "Walls"})
         LoadDirectory(folder / subfolder);
 }
