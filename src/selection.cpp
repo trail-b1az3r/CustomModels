@@ -1,5 +1,7 @@
 #include "selection.hpp"
 
+#include <cctype>
+
 #include "UnityEngine/HideFlags.hpp"
 #include "assets.hpp"
 #include "config.hpp"
