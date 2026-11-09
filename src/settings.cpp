@@ -314,6 +314,9 @@ void SelectionSettings::convertAllClicked() {
     for (auto const& e : errors)
         logger.error("  {}", e);
 
+    // Conversion creates both the saber archive and its .weeeee... trail
+    // sidecar. Refresh the manifest index before rebuilding either picker.
+    LoadManifests();
     RefreshModelList(true);
     LoadSelections([]() { PreviewSettings::GetInstance()->Refresh(true); });
 }
