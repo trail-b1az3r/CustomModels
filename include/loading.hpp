@@ -10,8 +10,9 @@ namespace CustomModels {
         std::string loadingFile;
         std::string currentBundleFile;
         std::string loadingBundleFile;
-        UnityEngine::AssetBundle* bundle;
-        UnityEngine::GameObject* asset;
+        UnityEngine::AssetBundle* bundle = nullptr;
+        UnityEngine::GameObject* asset = nullptr;
+        uint64_t loadId = 0;
 
         UnityEngine::GameObject* GetChild(std::string const& name);
         UnityEngine::GameObject* InstantiateChild(std::string const& name);
@@ -24,4 +25,7 @@ namespace CustomModels {
     extern std::map<std::string, Manifest> files;
 
     void LoadManifests();
+    // Removes cached bundle files that no longer belong to an installed model.
+    // Only safe before anything has been loaded (startup).
+    void CleanBundleCache();
 }

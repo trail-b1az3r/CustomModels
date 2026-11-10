@@ -76,6 +76,10 @@ DECLARE_CLASS_CODEGEN_INTERFACES(CustomModels, SelectionSettings, HMUI::ViewCont
     DECLARE_INSTANCE_FIELD(int, deletingModel);
     std::vector<class ListItem*> models;
 
+    // Rebuilds the model list if the menu has been created; safe to call at
+    // any time (does not create the menu).
+    static void RefreshIfCreated();
+
    private:
     static SelectionSettings* instance;
 };

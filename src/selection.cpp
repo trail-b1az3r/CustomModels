@@ -1,6 +1,7 @@
 #include "selection.hpp"
 
 #include <cctype>
+#include <set>
 
 #include "UnityEngine/HideFlags.hpp"
 #include "assets.hpp"
@@ -43,9 +44,9 @@ void CustomModels::AssetInfo::Load(std::string const& file, std::function<void()
 }
 
 static CustomModels::Saber SaberAsset;
-static CustomModels::Saber TrailAsset;
+static CustomModels::Saber TrailAsset(true);
 static CustomModels::Saber MenuSaberAsset;
-static CustomModels::Saber MenuTrailAsset;
+static CustomModels::Saber MenuTrailAsset(true);
 static CustomModels::Note NoteAsset;
 static CustomModels::Wall WallAsset;
 
@@ -224,6 +225,16 @@ static std::set<std::string> StoredCovers() {
     return ret;
 }
 
+static std::vector<std::string> const Extensions = {".whacker", ".cyoob", ".box"};
+static constexpr char TrailPackageExtension[] = ".weeeeeeeeeeeeeeeeeeeee";
+
+static bool HasExtension(std::string const& file, std::string const& wanted) {
+    auto extension = std::filesystem::path(file).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == wanted;
+}
+
 struct FileListItem : CustomModels::ListItem {
     std::string file;
     FileListItem(std::string file) : file(std::move(file)) {}
@@ -233,8 +244,22 @@ struct FileListItem : CustomModels::ListItem {
             return cover;
         return EmptyPreview();
     }
-    std::string Name() override { return CustomModels::files[file].descriptor.objectName; }
-    std::string Author() override { return CustomModels::files[file].descriptor.author; }
+    std::string Name() override {
+        auto it = CustomModels::files.find(file);
+        if (it == CustomModels::files.end())
+            return std::filesystem::path(file).stem().string();
+        auto const& name = it->second.descriptor.objectName;
+        if (name.empty())
+            return std::filesystem::path(file).stem().string();
+        // sabers listed for their trail are marked as such
+        if (CustomModels::SettingsCoordinator::GetInstance()->trail && HasExtension(file, ".whacker"))
+            return name + " (trail)";
+        return name;
+    }
+    std::string Author() override {
+        auto it = CustomModels::files.find(file);
+        return it == CustomModels::files.end() ? "" : it->second.descriptor.author;
+    }
     void Select(std::function<void()> onLoaded) override {
         logger.debug("select model {}", file);
         auto selection = (CustomModels::Selection) CustomModels::SettingsCoordinator::ModelSelection();
@@ -269,9 +294,31 @@ struct FileListItem : CustomModels::ListItem {
                 break;
             }
         }
+        // a trail package is useless without its saber, remove those too
+        std::vector<std::string> deleting = {file};
+        for (auto const& [other, manifest] : CustomModels::files) {
+            if (other != file && !manifest.bundleSource.empty() &&
+                (std::filesystem::path(other).parent_path() / manifest.bundleSource).string() == file)
+                deleting.emplace_back(other);
+        }
+        for (auto const& path : deleting) {
+            if (path == file)
+                continue;
+            for (int i = 0; i <= (int) CustomModels::Selection::SelectionMax; i++) {
+                auto& model = GetModelConfig(i);
+                if (model == path) {
+                    model = "";
+                    changed = true;
+                    CustomModels::assets[(CustomModels::Selection) i]->SetDefault();
+                }
+            }
+        }
         if (changed)
             getConfig().Save();
-        std::filesystem::remove(file);
+        for (auto const& path : deleting) {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
         CustomModels::LoadManifests();
     }
     bool Deletable() override { return true; }
@@ -292,16 +339,6 @@ static int prevModelType;
 static bool prevMenu;
 static bool prevTrail;
 
-static std::vector<std::string> const Extensions = {".whacker", ".cyoob", ".box"};
-static constexpr char TrailPackageExtension[] = ".weeeeeeeeeeeeeeeeeeeee";
-
-static bool HasExtension(std::string const& file, std::string const& wanted) {
-    auto extension = std::filesystem::path(file).extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return extension == wanted;
-}
-
 static void RefreshListItems(int modelType, bool trail, bool menu) {
     for (auto item : listItems)
         delete item;
@@ -318,12 +355,30 @@ static void RefreshListItems(int modelType, bool trail, bool menu) {
     auto unsorted = listItems.size();
 
     auto remove = StoredCovers();
-    std::string const wantedExtension = modelType == 0 && trail ? TrailPackageExtension : Extensions[modelType];
-    for (auto const& [file, _] : CustomModels::files) {
-        if (!HasExtension(file, wantedExtension))
-            continue;
-        listItems.emplace_back(new FileListItem(file));
-        remove.erase(file);
+    if (modelType == 0 && trail) {
+        // Any trail can be used with any saber: the trail list holds every
+        // trail package plus every saber (for its trail). A saber that already
+        // has a trail package is listed once, through the package.
+        std::set<std::string> linked;
+        for (auto const& [file, manifest] : CustomModels::files) {
+            if (HasExtension(file, TrailPackageExtension) && !manifest.bundleSource.empty())
+                linked.emplace((std::filesystem::path(file).parent_path() / manifest.bundleSource).string());
+        }
+        for (auto const& [file, _] : CustomModels::files) {
+            bool const package = HasExtension(file, TrailPackageExtension);
+            bool const saber = HasExtension(file, Extensions[0]);
+            if (!package && !(saber && !linked.contains(file)))
+                continue;
+            listItems.emplace_back(new FileListItem(file));
+            remove.erase(file);
+        }
+    } else {
+        for (auto const& [file, _] : CustomModels::files) {
+            if (!HasExtension(file, Extensions[modelType]))
+                continue;
+            listItems.emplace_back(new FileListItem(file));
+            remove.erase(file);
+        }
     }
     for (auto const& file : remove) {
         UnityEngine::Object::Destroy(fileCovers[file]->texture);

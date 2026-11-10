@@ -1,11 +1,15 @@
 #include "converter.hpp"
 
 #include "beatsaber-hook/shared/utils/utils.h"
+#include "bsml/shared/BSML/MainThreadScheduler.hpp"
 #include "main.hpp"
 #include "vivify/VivifyBundleConvert.hpp"
 #include "zip.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <thread>
 #include <chrono>
 #include <cctype>
 #include <fstream>
@@ -76,7 +80,10 @@ constexpr char kTrailPackageExtension[] = ".weeeeeeeeeeeeeeeeeeeee";
 std::string ConfigFor(PcModelType type) {
     switch (type) {
         case PcModelType::Saber:
-            return R"({"hasTrail":false,"keepFakeGlow":false,"isLegacy":false,"fromPc":true})";
+            // PC trails are found at load time (see saber.cpp), and a saber
+            // whose trail cannot be found falls back to the default trail
+            // rather than having none.
+            return R"({"hasTrail":true,"keepFakeGlow":false,"isLegacy":false,"fromPc":true})";
         case PcModelType::Block:
             return R"({"hasDebris":false,"hasBomb":false,"hasSlider":false,"showArrows":false,"isMirrorable":true,"isLegacy":false,"fromPc":true})";
         default:
@@ -245,8 +252,10 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
         std::string const packageJson = MakePackageJson(stem, "- PC model -", "Converted from PC bundle",
                                                         androidFileName, ConfigFor(type));
 
-        auto bundleBytes = readfile(convertedBundle.string());
-        if (bundleBytes.empty()) {
+        // The converted bundle is streamed into the archive from disk rather
+        // than read into memory: it is uncompressed and can be very large.
+        std::error_code sizeError;
+        if (std::filesystem::file_size(convertedBundle, sizeError) == 0 || sizeError) {
             result.ok = false;
             result.message = "converted UnityFS bundle is empty or unreadable";
             return result;
@@ -257,15 +266,16 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
         // trail meshes, materials, and endpoint transforms remain valid, while
         // both selections share the same loaded Unity AssetBundle at runtime.
         std::vector<std::pair<std::string, std::string>> files;
-        files.emplace_back(androidFileName, std::move(bundleBytes));
         files.emplace_back("package.json", packageJson);
         files.emplace_back("thumbnail.png", DefaultThumbnailPng());
+        std::vector<std::pair<std::string, std::string>> diskFiles;
+        diskFiles.emplace_back(androidFileName, convertedBundle.string());
 
         std::string const outputName = stem + QuestExtensionFor(type);
         std::filesystem::path const outputPath = destFolder / outputName;
         temporaryQuest = outputPath.string() + ".tmp";
         std::filesystem::remove(temporaryQuest, ec);
-        if (!WriteZipFile(temporaryQuest.string(), files)) {
+        if (!WriteZipFile(temporaryQuest.string(), files, diskFiles)) {
             result.ok = false;
             result.message = "could not create a valid Quest model archive";
             return result;
@@ -339,52 +349,152 @@ ConvertResult ConvertPcModelToQuest(std::string const& sourcePath, std::filesyst
     return result;
 }
 
-BatchResult ConvertDirectoryModels(std::filesystem::path const& directory) {
+namespace {
+
+constexpr char kFailedSuffix[] = ".failed";
+constexpr char kGuardName[] = ".converting";
+
+std::string Lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+std::filesystem::path OutputFolderFor(PcModelType type, std::filesystem::path const& directory, std::filesystem::path const& modelRoot) {
+    if (modelRoot.empty())
+        return directory;
+    // .bloq/.pixie can end up in Sabers or Legacy (manual copies, MBF, old
+    // installs). Writing the .cyoob next to them hid it: only Notes is
+    // indexed for notes, so the model "did not convert".
+    return modelRoot / (type == PcModelType::Saber ? "Sabers" : "Notes");
+}
+
+// Renames a source that cannot be converted so it is not retried, and its
+// cost paid again, on every launch. "Convert All" retries these explicitly.
+void MarkFailed(std::filesystem::path const& path) {
+    std::error_code ec;
+    auto target = path.string() + kFailedSuffix;
+    std::filesystem::remove(target, ec);
+    std::filesystem::rename(path, target, ec);
+    if (ec)
+        logger.warn("could not mark {} as failed: {}", path.string(), ec.message());
+}
+
+void WriteGuard(std::filesystem::path const& modelRoot, std::filesystem::path const& source) {
+    if (modelRoot.empty())
+        return;
+    std::ofstream out(modelRoot / kGuardName, std::ios::trunc);
+    out << source.string();
+}
+
+void ClearGuard(std::filesystem::path const& modelRoot) {
+    if (modelRoot.empty())
+        return;
+    std::error_code ec;
+    std::filesystem::remove(modelRoot / kGuardName, ec);
+}
+
+void RestoreFailed(std::filesystem::path const& directory) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(directory, ec))
+        return;
+    std::vector<std::filesystem::path> failed;
+    for (std::filesystem::recursive_directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->is_regular_file(ec) && Lower(it->path().extension().string()) == kFailedSuffix)
+            failed.emplace_back(it->path());
+    }
+    for (auto const& path : failed) {
+        auto original = path;
+        original.replace_extension();
+        std::error_code renameError;
+        if (!std::filesystem::exists(original, renameError))
+            std::filesystem::rename(path, original, renameError);
+    }
+}
+
+}  // namespace
+
+void RecoverInterruptedConversion(std::filesystem::path const& modelRoot) {
+    auto guard = modelRoot / kGuardName;
+    std::error_code ec;
+    if (!std::filesystem::exists(guard, ec))
+        return;
+    std::string source;
+    {
+        std::ifstream in(guard);
+        std::getline(in, source);
+    }
+    ClearGuard(modelRoot);
+    if (source.empty() || !std::filesystem::exists(source, ec))
+        return;
+    // The game died while this file was being converted (most likely out of
+    // memory). Set it aside so the next launch does not crash the same way.
+    logger.error("conversion of {} did not finish last time, skipping it", source);
+    MarkFailed(source);
+}
+
+BatchResult ConvertDirectoryModels(std::filesystem::path const& directory, std::filesystem::path const& modelRoot) {
     BatchResult result;
     try {
-        if (!std::filesystem::exists(directory) || !std::filesystem::is_directory(directory))
+        std::error_code ec;
+        if (!std::filesystem::exists(directory, ec) || !std::filesystem::is_directory(directory, ec))
             return result;
 
         // Snapshot candidates before writing outputs. This avoids walking newly
         // created Quest archives during the same recursive directory scan.
         std::vector<std::filesystem::path> candidates;
-        for (auto const& entry : std::filesystem::recursive_directory_iterator(directory)) {
-            if (!entry.is_regular_file())
+        for (std::filesystem::recursive_directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code typeError;
+            if (!it->is_regular_file(typeError))
                 continue;
-            auto ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(),
-                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            auto ext = Lower(it->path().extension().string());
             if (ext == ".saber" || ext == ".bloq" || ext == ".pixie")
-                candidates.emplace_back(entry.path());
+                candidates.emplace_back(it->path());
         }
 
         for (auto const& path : candidates) {
-            auto ext = path.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(),
-                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            auto ext = Lower(path.extension().string());
             if (!IsPcModelBundle(path.string())) {
                 result.errors.emplace_back(path.string() + ": not a readable UnityFS bundle");
                 result.failed++;
+                MarkFailed(path);
                 continue;
             }
 
             PcModelType const type = PcModelTypeFromExtension(ext);
-            auto const out = ConvertPcModelToQuest(path.string(), directory, type);
+            auto const destination = OutputFolderFor(type, directory, modelRoot);
+            auto const begin = std::chrono::steady_clock::now();
+
+            WriteGuard(modelRoot, path);
+            ConvertResult out;
+            try {
+                out = ConvertPcModelToQuest(path.string(), destination, type);
+            } catch (std::exception const& e) {
+                out.ok = false;
+                out.message = std::string("conversion threw: ") + e.what();
+            } catch (...) {
+                out.ok = false;
+                out.message = "conversion threw an unknown error";
+            }
+            ClearGuard(modelRoot);
+
+            auto const seconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count() / 1000.0;
             if (out.ok) {
-                std::error_code ec;
-                std::filesystem::remove(path, ec);
-                if (ec) {
+                std::error_code removeError;
+                std::filesystem::remove(path, removeError);
+                if (removeError) {
                     result.failed++;
-                    result.errors.emplace_back(path.string() + ": converted, but source could not be removed: " + ec.message());
-                    logger.error("converted {}, but could not remove source: {}", path.string(), ec.message());
+                    result.errors.emplace_back(path.string() + ": converted, but source could not be removed: " + removeError.message());
+                    logger.error("converted {}, but could not remove source: {}", path.string(), removeError.message());
                     continue;
                 }
                 result.converted++;
-                logger.info("converted {} to {}", path.filename().string(), out.message);
+                logger.info("converted {} in {:.1f}s: {}", path.filename().string(), seconds, out.message);
             } else {
                 result.failed++;
                 result.errors.emplace_back(path.string() + ": " + out.message);
                 logger.error("failed to convert {}: {}", path.string(), out.message);
+                MarkFailed(path);
             }
         }
     } catch (std::exception const& e) {
@@ -392,6 +502,41 @@ BatchResult ConvertDirectoryModels(std::filesystem::path const& directory) {
         result.failed++;
     }
     return result;
+}
+
+static std::atomic<bool> conversionRunning = false;
+
+bool ConversionRunning() {
+    return conversionRunning;
+}
+
+bool ConvertAllAsync(std::filesystem::path const& modelRoot, bool retryFailed, std::function<void(BatchResult)> onDone) {
+    bool expected = false;
+    if (!conversionRunning.compare_exchange_strong(expected, true))
+        return false;
+
+    std::thread([modelRoot, retryFailed, onDone = std::move(onDone)]() {
+        BatchResult total;
+        try {
+            for (auto const& subfolder : {"Sabers", "Notes", "Walls", "Legacy"}) {
+                if (retryFailed)
+                    RestoreFailed(modelRoot / subfolder);
+                auto result = ConvertDirectoryModels(modelRoot / subfolder, modelRoot);
+                total.converted += result.converted;
+                total.failed += result.failed;
+                total.errors.insert(total.errors.end(), result.errors.begin(), result.errors.end());
+            }
+        } catch (...) {
+            total.failed++;
+            total.errors.emplace_back("background conversion failed unexpectedly");
+        }
+        BSML::MainThreadScheduler::Schedule([total = std::move(total), onDone]() {
+            conversionRunning = false;
+            if (onDone)
+                onDone(total);
+        });
+    }).detach();
+    return true;
 }
 
 }  // namespace CustomModels::Converter

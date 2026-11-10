@@ -65,19 +65,21 @@ namespace CustomModels {
         VALUE(UnparsedJSON, config);
     };
 
+    // Old Qosmetics exporters left fields out freely. A single missing field
+    // used to fail the whole parse, and with it the legacy conversion.
     DECLARE_JSON_STRUCT(LegacyDescriptor) {
-        VALUE(std::string, authorName);
-        VALUE(std::string, objectName);
-        VALUE(std::string, description);
+        VALUE_DEFAULT(std::string, authorName, "- Unknown -");
+        VALUE_DEFAULT(std::string, objectName, "");
+        VALUE_DEFAULT(std::string, description, "- Legacy file -");
     };
 
     DECLARE_JSON_STRUCT(LegacyTrail) {
-        VALUE(std::string, name);
-        VALUE(int, colorType);
-        VALUE(ConfigUtils::Color, trailColor);
-        VALUE(ConfigUtils::Color, multiplierColor);
-        VALUE(int, length);
-        VALUE(float, whiteStep);
+        VALUE_DEFAULT(std::string, name, "");
+        VALUE_DEFAULT(int, colorType, 0);
+        VALUE_DEFAULT(ConfigUtils::Color, trailColor, ConfigUtils::Color(1, 1, 1, 1));
+        VALUE_DEFAULT(ConfigUtils::Color, multiplierColor, ConfigUtils::Color(1, 1, 1, 1));
+        VALUE_DEFAULT(int, length, 14);
+        VALUE_DEFAULT(float, whiteStep, 0);
     };
 
     DECLARE_JSON_STRUCT(LegacySaberConfig) {

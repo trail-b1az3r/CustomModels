@@ -296,28 +296,33 @@ void SelectionSettings::confirmDeleteClicked() {
         DestroyMenuPointers();
 }
 
+void SelectionSettings::RefreshIfCreated() {
+    if (!instance)
+        return;
+    instance->RefreshModelList(true);
+    // created together with the selection menu
+    PreviewSettings::GetInstance()->Refresh(true);
+}
+
 void SelectionSettings::convertAllClicked() {
     std::filesystem::path dataFolder = getDataDir(MOD_ID);
 
-    int converted = 0;
-    int failed = 0;
-    std::vector<std::string> errors;
-    for (auto const& subfolder : {"Sabers", "Notes", "Walls", "Legacy"}) {
-        auto result = CustomModels::Converter::ConvertDirectoryModels(dataFolder / subfolder);
-        converted += result.converted;
-        failed += result.failed;
-        errors.insert(errors.end(), result.errors.begin(), result.errors.end());
-    }
+    // Conversion can take a long time for big models. It used to run right
+    // here on the main thread, freezing the game until it finished (long
+    // enough for the headset to kill it). Run it in the background instead;
+    // files that failed before get one more try since this was asked for.
+    bool started = CustomModels::Converter::ConvertAllAsync(dataFolder, true, [](CustomModels::Converter::BatchResult result) {
+        logger.info("PC model conversion: {} converted, {} failed", result.converted, result.failed);
+        for (auto const& e : result.errors)
+            logger.error("  {}", e);
 
-    logger.info("PC model conversion: {} converted, {} failed", converted, failed);
-    for (auto const& e : errors)
-        logger.error("  {}", e);
-
-    // Conversion creates both the saber archive and its .weeeee... trail
-    // sidecar. Refresh the manifest index before rebuilding either picker.
-    LoadManifests();
-    RefreshModelList(true);
-    LoadSelections([]() { PreviewSettings::GetInstance()->Refresh(true); });
+        // Conversion creates both the saber archive and its .weeeee... trail
+        // sidecar. Refresh the manifest index before rebuilding either picker.
+        LoadManifests();
+        LoadSelections([]() { SelectionSettings::RefreshIfCreated(); });
+    });
+    if (!started)
+        logger.info("a conversion is already running");
 }
 
 void ModSettings::DidActivate(bool firstActivation, bool, bool) {

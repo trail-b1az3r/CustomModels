@@ -21,6 +21,7 @@
 // reviewed and unit-tested on a host compiler.
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,21 @@ struct BatchResult {
     int failed = 0;
     std::vector<std::string> errors;
 };
-BatchResult ConvertDirectoryModels(std::filesystem::path const& directory);
+// When modelRoot is given (the mod's data folder), outputs go to the folder
+// for their type (Sabers/ or Notes/) instead of next to the source, sources
+// that fail are renamed to *.failed so they are not retried on every launch,
+// and a guard file records the conversion in progress (see
+// RecoverInterruptedConversion).
+BatchResult ConvertDirectoryModels(std::filesystem::path const& directory, std::filesystem::path const& modelRoot = {});
+
+// If the game died during a conversion, mark that source failed so the crash
+// does not repeat on every launch. Call once at startup before converting.
+void RecoverInterruptedConversion(std::filesystem::path const& modelRoot);
+
+// Converts every PC model under modelRoot's Sabers/Notes/Walls/Legacy on a
+// background thread, then calls onDone on the main thread. retryFailed first
+// restores *.failed sources. Returns false if a conversion is already running.
+bool ConvertAllAsync(std::filesystem::path const& modelRoot, bool retryFailed, std::function<void(BatchResult)> onDone);
+bool ConversionRunning();
 
 }  // namespace CustomModels::Converter

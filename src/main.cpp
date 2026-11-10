@@ -27,7 +27,7 @@ extern "C" void setup(CModInfo* info) {
     *info = modInfo.to_c();
 
     std::filesystem::path dataFolder = getDataDir(MOD_ID);
-    for (auto& subfolder : {"Sabers", "Notes", "Walls", "Legacy", "Zips"}) {
+    for (auto& subfolder : {"Sabers", "Notes", "Walls", "Legacy", "Zips", "Cache"}) {
         auto path = dataFolder / subfolder;
         if (!direxists(path.string()))
             mkpath(path.string());
@@ -63,22 +63,31 @@ extern "C" void late_load() {
     CustomModels::ConvertLegacyModels();
     CustomModels::MoveQosmeticsFolders();
 
-    // Older PC-format models can be left in any of the normal model folders
-    // (or Legacy after an upgrade). Convert them before indexing manifests so
-    // both the model and its generated .weeeee... trail entry are available
-    // immediately after launch, without requiring a manual conversion step.
     std::filesystem::path modelFolder = getDataDir(MOD_ID);
-    for (auto const& subfolder : {"Sabers", "Notes", "Walls", "Legacy"}) {
-        auto result = CustomModels::Converter::ConvertDirectoryModels(modelFolder / subfolder);
-        if (result.converted || result.failed)
-            logger.info("startup conversion in {}: {} converted, {} failed", subfolder, result.converted, result.failed);
-        for (auto const& error : result.errors)
-            logger.warn("startup model conversion: {}", error);
-    }
+    // If the last launch died converting a PC model, set that file aside
+    // first so the same crash cannot repeat on every launch.
+    CustomModels::Converter::RecoverInterruptedConversion(modelFolder);
 
     CustomModels::LoadDefaults();
     CustomModels::LoadManifests();
+    CustomModels::CleanBundleCache();
     CustomModels::LoadSelections();
+
+    // PC models (.saber/.bloq/.pixie) are converted on a background thread.
+    // This used to run here, on the main thread, before the game had even
+    // finished starting: with a few large models it took long enough (and
+    // enough memory) for the game to be killed on every launch. Converted
+    // models and their .weeee... trail packages appear once it finishes.
+    CustomModels::Converter::ConvertAllAsync(modelFolder, false, [](CustomModels::Converter::BatchResult result) {
+        if (result.converted || result.failed)
+            logger.info("startup conversion: {} converted, {} failed", result.converted, result.failed);
+        for (auto const& error : result.errors)
+            logger.warn("startup model conversion: {}", error);
+        if (result.converted > 0) {
+            CustomModels::LoadManifests();
+            CustomModels::SelectionSettings::RefreshIfCreated();
+        }
+    });
 
     Lapiz::Zenject::Zenjector::Get(modInfo)->Install(Lapiz::Zenject::Location::Player | Lapiz::Zenject::Location::Tutorial, CustomModels::Register);
 

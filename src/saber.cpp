@@ -15,6 +15,10 @@
 #include "trail.hpp"
 #include "utils.hpp"
 
+#include <cctype>
+#include <cstring>
+#include <set>
+
 int const CustomModels::SaberLayer = GlobalNamespace::LayerMasks::GetLayer("Saber");
 
 static inline void AddTrail(
@@ -25,7 +29,17 @@ static inline void AddTrail(
     UnityEngine::Transform* top,
     UnityEngine::Transform* bottom
 ) {
-    auto material = parent->GetComponent<UnityEngine::MeshRenderer*>()->material;
+    // A trail object without a renderer (or with an empty material slot) used
+    // to dereference null here and take the game down when the saber loaded.
+    if (!top || !bottom || !saber)
+        return;
+    UnityEngine::Material* material = nullptr;
+    if (auto renderer = parent ? parent->GetComponent<UnityEngine::Renderer*>() : nullptr) {
+        if (auto shared = renderer->sharedMaterial)
+            material = UnityEngine::Material::New_ctor(shared);
+    }
+    if (!material)
+        material = CustomModels::GetDefaultTrailMaterial();
     auto topPos = top->position - saber->transform->position;
     auto bottomPos = bottom->position - saber->transform->position;
     vec.push_back({trail, material, topPos, bottomPos});
@@ -136,6 +150,94 @@ static CustomModels::Trail GetDefaultTrail(int colorType) {
     return {info, CustomModels::GetDefaultTrailMaterial(), UnityEngine::Vector3::get_forward(), UnityEngine::Vector3::get_zero()};
 }
 
+// ---------------------------------------------------------------------------
+// PC saber trails
+//
+// A PC .saber describes its trail with a CustomTrail script component. That
+// script does not exist on Quest, so Unity drops the component on load and its
+// settings are gone, but the two transforms it pointed at (the trail's start
+// and end) are still in the hierarchy. Saber authors name them consistently
+// enough to find: TrailStart/TrailEnd, PointStart/PointEnd, Trail Bottom/Top,
+// and so on. The trail then uses the game's own trail material.
+// ---------------------------------------------------------------------------
+
+static std::string Normalize(std::string name) {
+    std::string out;
+    for (unsigned char c : name) {
+        if (std::isalnum(c))
+            out.push_back((char) std::tolower(c));
+    }
+    return out;
+}
+
+static bool IsTrailStart(std::string const& n) {
+    bool point = n.find("trail") != std::string::npos || n.find("point") != std::string::npos;
+    return point && (n.find("start") != std::string::npos || n.find("bottom") != std::string::npos || n.find("base") != std::string::npos);
+}
+
+static bool IsTrailEnd(std::string const& n) {
+    bool point = n.find("trail") != std::string::npos || n.find("point") != std::string::npos;
+    return point && (n.find("end") != std::string::npos || n.find("top") != std::string::npos || n.find("tip") != std::string::npos);
+}
+
+// the part of a name that identifies which trail it belongs to
+static std::string TrailKey(std::string n) {
+    for (auto word : {"start", "bottom", "base", "end", "top", "tip", "trail", "point"}) {
+        for (auto pos = n.find(word); pos != std::string::npos; pos = n.find(word))
+            n.erase(pos, std::strlen(word));
+    }
+    return n;
+}
+
+static void FindPcTrailsOn(UnityEngine::Transform* saber, int colorType, int& id, std::vector<CustomModels::Trail>& out) {
+    if (!saber)
+        return;
+    std::vector<std::pair<UnityEngine::Transform*, std::string>> starts, ends;
+    for (auto transform : saber->GetComponentsInChildren<UnityEngine::Transform*>(true)) {
+        if (!transform || transform == saber)
+            continue;
+        auto name = Normalize(transform->name);
+        if (IsTrailStart(name))
+            starts.emplace_back(transform, TrailKey(name));
+        else if (IsTrailEnd(name))
+            ends.emplace_back(transform, TrailKey(name));
+    }
+
+    std::set<UnityEngine::Transform*> used;
+    for (auto& [start, key] : starts) {
+        UnityEngine::Transform* end = nullptr;
+        for (auto& [candidate, candidateKey] : ends) {
+            if (!used.contains(candidate) && candidateKey == key) {
+                end = candidate;
+                break;
+            }
+        }
+        if (!end && starts.size() == 1 && ends.size() == 1)
+            end = ends.front().first;
+        if (!end)
+            continue;
+        used.emplace(end);
+
+        CustomModels::TrailInfo info;
+        info.trailId = id++;
+        info.colorType = colorType;
+        info.trailColor = UnityEngine::Color::get_white();
+        info.multiplierColor = UnityEngine::Color::get_white();
+        info.length = 20;
+        info.whiteStep = 0;
+        AddTrail(out, info, saber, nullptr, end, start);
+    }
+}
+
+static void FindPcTrails(UnityEngine::GameObject* prefab, CustomModels::Saber& saber) {
+    logger.debug("looking for PC trail points");
+    int id = 0;
+    FindPcTrailsOn(prefab->transform->Find("LeftSaber"), 0, id, saber.leftTrails);
+    FindPcTrailsOn(prefab->transform->Find("RightSaber"), 1, id, saber.rightTrails);
+    if (!saber.leftTrails.empty() || !saber.rightTrails.empty())
+        logger.info("found {} PC trail(s)", saber.leftTrails.size() + saber.rightTrails.size());
+}
+
 void CustomModels::Saber::SetDefault() {
     asset.Unload();
     info.hasTrail = true;
@@ -162,11 +264,35 @@ std::string CustomModels::Saber::ObjectName() {
 void CustomModels::Saber::PostLoad() {
     leftTrails.clear();
     rightTrails.clear();
+    if (!asset.asset)
+        return;
     // Keep GPU instancing enabled on imported materials. Disabling it here
     // mutates shared bundle materials globally and can turn otherwise batched
     // custom models into many individual draw calls.
-    if (info.hasTrail)
-        info.isLegacy ? FindLegacyTrails(asset.bundle, asset.asset, *this) : FindTrails(asset.asset, *this);
+
+    // A model picked from the trail list is used for its trail whatever its
+    // own saber says, so look for trails on it regardless of hasTrail.
+    bool const search = info.hasTrail || info.fromPc || trailSelection;
+    if (!search)
+        return;
+    try {
+        if (info.isLegacy)
+            FindLegacyTrails(asset.bundle, asset.asset, *this);
+        else
+            FindTrails(asset.asset, *this);
+        if (leftTrails.empty() && rightTrails.empty() && (info.fromPc || info.isLegacy || trailSelection))
+            FindPcTrails(asset.asset, *this);
+    } catch (std::exception const& e) {
+        logger.error("failed to read trails: {}", e.what());
+        leftTrails.clear();
+        rightTrails.clear();
+    }
+    // Picking a trail should always give a trail; a PC saber had one on PC.
+    if (leftTrails.empty() && rightTrails.empty() && (info.fromPc || trailSelection)) {
+        logger.info("no custom trails found, using the default trail");
+        leftTrails = {GetDefaultTrail(0)};
+        rightTrails = {GetDefaultTrail(1)};
+    }
 }
 
 static void AddLoadingGuard(bool menu, bool trail) {

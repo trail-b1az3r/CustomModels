@@ -142,6 +142,9 @@ struct ShaderScan {
   // compile them for the bundle's platform and shipped them empty. Nothing can
   // draw them from this bundle; the PC build of the same map can stand in.
   std::vector<std::string> emptyShaderNames;
+  // Shaders with GLSL programs of which none is a multiview (two-eye) one:
+  // the shader has no stereo code, so it can only draw one eye at a time.
+  std::vector<std::string> singleViewOnlyShaderNames;
   // Whether any program names _CameraDepthTexture (GLSL text, a DXBC resource
   // table, or a parameter blob): only then does the map need the depth
   // pre-pass that renders it.

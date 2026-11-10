@@ -1615,6 +1615,18 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   // comes from unity_StereoEyeIndex; the translator feeds that from the view.
   // Which refs get multiview code. Keyed by the ref's position in `refs`.
   std::vector<bool> multiviewRef(refs.size(), true);
+  // Which refs hold single-pass instanced code: a STEREO_INSTANCING_ON variant,
+  // or a plain variant pointed at one. Their vertex stage takes the eye from
+  // the instance ID even when a geometry stage, not the vertex stage, writes
+  // the layer, and the translator has to be told (stereoInstancedProgram).
+  // 0.15.1 added that to the translator and never set it here, so its fix for
+  // one-eye geometry shaders did not reach a converted bundle until 0.15.4.
+  std::vector<bool> spiRef(refs.size(), false);
+  for (size_t r = 0; r < refs.size(); r++) {
+    for (uint16_t k : refs[r].keywordIndices) {
+      if (k < keywordNames.size() && keywordNames[k] == "STEREO_INSTANCING_ON") spiRef[r] = true;
+    }
+  }
 
   // The separate-variants path needs to rename the stereo keyword. In a 2021
   // bundle that is one entry of m_KeywordNames, rewritten in place, which only
@@ -1733,6 +1745,9 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
             out.stereoRemapped++;
           }
           plain.stereoRemapped = true;
+          if (std::string_view(stereoKeyword) == "STEREO_INSTANCING_ON") {
+            spiRef[static_cast<size_t>(&plain - refs.data())] = true;
+          }
           break;
         }
       }
@@ -1744,13 +1759,15 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
   auto indexOf = [&](ParsedProgramRef const& ref) { return static_cast<size_t>(&ref - refs.data()); };
   // Keyed by entry and mode: one entry can be translated both ways when a
   // plain and a stereo variant share it.
-  std::map<std::pair<uint32_t, bool>, Vivify::Dxbc::GlslResult> translated;
+  std::map<std::tuple<uint32_t, bool, bool>, Vivify::Dxbc::GlslResult> translated;
   auto translate = [&](ParsedProgramRef const& ref) -> Vivify::Dxbc::GlslResult const* {
     uint32_t const blob = ref.blobIndex;
     bool const multiview = multiviewRef[indexOf(ref)];
     Vivify::Dxbc::GlslOptions options;
     options.multiview = multiview;
-    auto cached = translated.find({blob, multiview});
+    bool const spi = multiview && spiRef[indexOf(ref)];
+    options.stereoInstancedProgram = spi;
+    auto cached = translated.find({blob, multiview, spi});
     if (cached == translated.end()) {
       Vivify::Dxbc::GlslResult result;
       auto at = entryAt.find(blob);
@@ -1773,7 +1790,7 @@ LinkedShader ConvertThroughParsedForm(uint8_t const* nodeData, size_t nodeSize,
           }
         }
       }
-      cached = translated.emplace(std::make_pair(blob, multiview), std::move(result)).first;
+      cached = translated.emplace(std::make_tuple(blob, multiview, spi), std::move(result)).first;
     }
     return cached->second.ok ? &cached->second : nullptr;
   };
@@ -2442,6 +2459,20 @@ ShaderScan ScanShaders(std::string const& bundlePath) {
       if (depthHere) {
         scan.samplesCameraDepth = true;
         scan.cameraDepthShaderNames.push_back(shader.name.empty() ? std::string("?") : shader.name);
+      }
+      int glslHere = 0;
+      bool multiviewHere = false;
+      for (auto const& program : decoded.programs) {
+        if (program.raw || !SerializedFileParse::GpuProgramIsGlslSource(program.programType)) continue;
+        static constexpr std::string_view kMultiview = "GL_OVR_multiview";
+        glslHere++;
+        if (std::search(program.code.begin(), program.code.end(), kMultiview.begin(), kMultiview.end()) !=
+            program.code.end()) {
+          multiviewHere = true;
+        }
+      }
+      if (decoded.ok && glslHere > 0 && !multiviewHere && !shader.name.empty()) {
+        scan.singleViewOnlyShaderNames.push_back(shader.name);
       }
       for (auto const& program : decoded.programs) {
         scan.programs++;

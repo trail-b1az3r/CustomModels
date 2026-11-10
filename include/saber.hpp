@@ -18,8 +18,14 @@ namespace CustomModels {
 
     struct Saber : AssetInfo {
         SaberInfo info;
+        // set on the Trail / Menu Trail selections: any saber picked there is
+        // used for its trail, so trails are always searched for and the
+        // default trail is the fallback
+        bool trailSelection = false;
         std::vector<Trail> leftTrails;
         std::vector<Trail> rightTrails;
+
+        Saber(bool trailSelection = false) : trailSelection(trailSelection) {}
 
         void SetDefault() override;
         bool ParseInfo(std::string const& file) override;

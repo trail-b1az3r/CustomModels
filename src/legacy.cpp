@@ -1,9 +1,13 @@
 #include "legacy.hpp"
 
 #include "UnityEngine/AssetBundle.hpp"
+#include "UnityEngine/Graphics.hpp"
 #include "UnityEngine/ImageConversion.hpp"
+#include "UnityEngine/Rect.hpp"
+#include "UnityEngine/RenderTexture.hpp"
 #include "UnityEngine/TextAsset.hpp"
 #include "UnityEngine/Texture2D.hpp"
+#include "UnityEngine/TextureFormat.hpp"
 #include "beatsaber-hook/shared/config/config-utils.hpp"
 #include "json.hpp"
 #include "main.hpp"
@@ -12,6 +16,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 
 static void ExtractZipFiles(std::filesystem::path destination) {
     std::filesystem::path folder = getDataDir(MOD_ID);
@@ -50,9 +55,10 @@ static bool LoadManifest(UnityEngine::AssetBundle* bundle, CustomModels::Manifes
     try {
         ReadFromString(json, legacy);
     } catch (std::exception const& e) {
-        logger.error("failed to parse legacy descriptor: {}", e.what());
+        // a broken descriptor only costs the name, not the whole model
+        logger.warn("failed to parse legacy descriptor: {}", e.what());
         logger.debug("descriptor was {}", json);
-        return false;
+        legacy.objectName = file;
     }
     manifest.descriptor.author = legacy.authorName;
     manifest.descriptor.objectName = legacy.objectName;
@@ -60,14 +66,62 @@ static bool LoadManifest(UnityEngine::AssetBundle* bundle, CustomModels::Manifes
     return true;
 }
 
+// Thumbnails in legacy bundles are almost never marked readable, and
+// EncodeToPNG throws on a non-readable texture. That exception used to abort
+// the whole conversion, which is why most .qsaber files never converted. Copy
+// the texture through the GPU into a small readable one instead, and if even
+// that fails just go without a cover image.
+static UnityEngine::Texture2D* ReadableCopy(UnityEngine::Texture2D* texture) {
+    int width = texture->width;
+    int height = texture->height;
+    if (width <= 0 || height <= 0)
+        return nullptr;
+    int const maxSize = 256;
+    if (std::max(width, height) > maxSize) {
+        float scale = (float) maxSize / std::max(width, height);
+        width = std::max(1, (int) (width * scale));
+        height = std::max(1, (int) (height * scale));
+    }
+    auto target = UnityEngine::RenderTexture::GetTemporary(width, height, 0);
+    if (!target)
+        return nullptr;
+    auto previous = UnityEngine::RenderTexture::get_active();
+    UnityEngine::Graphics::Blit(texture, target);
+    UnityEngine::RenderTexture::set_active(target);
+    auto copy = UnityEngine::Texture2D::New_ctor(width, height, UnityEngine::TextureFormat::RGBA32, false);
+    copy->ReadPixels(UnityEngine::Rect(0, 0, width, height), 0, 0);
+    copy->Apply();
+    UnityEngine::RenderTexture::set_active(previous);
+    UnityEngine::RenderTexture::ReleaseTemporary(target);
+    return copy;
+}
+
 static void
 LoadThumbnail(UnityEngine::AssetBundle* bundle, CustomModels::Descriptor& descriptor, std::vector<std::pair<std::string, std::string>>& files) {
-    auto thumbnail = bundle->LoadAsset<UnityEngine::Texture2D*>("thumbnail");
-    if (!thumbnail)
-        return;
-    descriptor.coverImage = "thumbnail.png";
-    auto bytes = UnityEngine::ImageConversion::EncodeToPNG(thumbnail);
-    files.emplace_back(descriptor.coverImage, std::string(bytes.begin(), bytes.end()));
+    try {
+        auto thumbnail = bundle->LoadAsset<UnityEngine::Texture2D*>("thumbnail");
+        if (!thumbnail)
+            return;
+        UnityEngine::Texture2D* source = thumbnail;
+        UnityEngine::Texture2D* copy = nullptr;
+        if (!thumbnail->isReadable) {
+            copy = ReadableCopy(thumbnail);
+            if (!copy)
+                return;
+            source = copy;
+        }
+        auto bytes = UnityEngine::ImageConversion::EncodeToPNG(source);
+        if (copy)
+            UnityEngine::Object::DestroyImmediate(copy);
+        if (!bytes || bytes.size() == 0)
+            return;
+        descriptor.coverImage = "thumbnail.png";
+        files.emplace_back(descriptor.coverImage, std::string(bytes.begin(), bytes.end()));
+    } catch (std::exception const& e) {
+        logger.warn("could not extract legacy thumbnail: {}", e.what());
+    } catch (...) {
+        logger.warn("could not extract legacy thumbnail");
+    }
 }
 
 static bool WriteZip(
@@ -80,17 +134,18 @@ static bool WriteZip(
     std::vector<std::pair<std::string, std::string>> files;
 
     LoadThumbnail(bundle, manifest.descriptor, files);
-    auto const bundleBytes = readfile(bundlePath.string());
-    if (bundleBytes.empty()) {
+    std::error_code ec;
+    if (std::filesystem::file_size(bundlePath, ec) == 0 || ec) {
         logger.error("legacy AssetBundle {} is empty or unreadable", bundlePath.string());
         return false;
     }
-    files.emplace_back(manifest.androidFileName, bundleBytes);
+    if (manifest.descriptor.objectName.empty())
+        manifest.descriptor.objectName = bundlePath.stem().string();
     files.emplace_back("package.json", WriteToString(manifest));
 
     std::string name = MetaCore::Strings::UniqueFileName(file, folder);
     auto const output = folder / name;
-    if (!CustomModels::WriteZipFile(output.string(), files)) {
+    if (!CustomModels::WriteZipFile(output.string(), files, {{manifest.androidFileName, bundlePath.string()}})) {
         logger.error("failed to write converted legacy model {}", output.string());
         return false;
     }
@@ -125,28 +180,41 @@ static CustomModels::SaberInfo LoadSaberConfig(UnityEngine::AssetBundle* bundle)
     return config;
 }
 
-static bool ConvertQSaber(std::filesystem::path const& path) {
+template <class F>
+static bool ConvertLegacy(std::filesystem::path const& path, char const* subfolder, char const* extension, F&& loadConfig) {
     std::filesystem::path folder = getDataDir(MOD_ID);
-    folder /= "Sabers";
+    folder /= subfolder;
 
     logger.info("converting {}", path.string());
 
-    auto output = path.stem().string() + ".whacker";
+    auto output = path.stem().string() + extension;
 
     auto bundle = UnityEngine::AssetBundle::LoadFromFile(path.string());
-    if (!bundle)
-        return false;
-
-    CustomModels::Manifest manifest;
-    if (!LoadManifest(bundle, manifest, path.stem())) {
-        bundle->Unload(true);
+    if (!bundle) {
+        logger.error("Unity could not open legacy bundle {}", path.string());
         return false;
     }
-    manifest.config = LoadSaberConfig(bundle);
 
-    bool const written = WriteZip(bundle, manifest, path, folder, output);
+    bool written = false;
+    try {
+        CustomModels::Manifest manifest;
+        if (LoadManifest(bundle, manifest, path.stem())) {
+            manifest.config = loadConfig(bundle);
+            written = WriteZip(bundle, manifest, path, folder, output);
+        }
+    } catch (std::exception const& e) {
+        logger.error("failed to convert legacy model {}: {}", path.string(), e.what());
+    } catch (...) {
+        logger.error("failed to convert legacy model {}: unknown error", path.string());
+    }
+    // always release the bundle, even after a failure, or the next model
+    // built from the same template cannot be opened
     bundle->Unload(true);
     return written;
+}
+
+static bool ConvertQSaber(std::filesystem::path const& path) {
+    return ConvertLegacy(path, "Sabers", ".whacker", LoadSaberConfig);
 }
 
 static CustomModels::NoteInfo LoadNoteConfig(UnityEngine::AssetBundle* bundle) {
@@ -160,27 +228,7 @@ static CustomModels::NoteInfo LoadNoteConfig(UnityEngine::AssetBundle* bundle) {
 }
 
 static bool ConvertQBloq(std::filesystem::path const& path) {
-    std::filesystem::path folder = getDataDir(MOD_ID);
-    folder /= "Notes";
-
-    logger.info("converting {}", path.string());
-
-    auto output = path.stem().string() + ".cyoob";
-
-    auto bundle = UnityEngine::AssetBundle::LoadFromFile(path.string());
-    if (!bundle)
-        return false;
-
-    CustomModels::Manifest manifest;
-    if (!LoadManifest(bundle, manifest, path.stem())) {
-        bundle->Unload(true);
-        return false;
-    }
-    manifest.config = LoadNoteConfig(bundle);
-
-    bool const written = WriteZip(bundle, manifest, path, folder, output);
-    bundle->Unload(true);
-    return written;
+    return ConvertLegacy(path, "Notes", ".cyoob", LoadNoteConfig);
 }
 
 static CustomModels::WallInfo LoadWallConfig(UnityEngine::AssetBundle* bundle) {
@@ -197,66 +245,91 @@ static CustomModels::WallInfo LoadWallConfig(UnityEngine::AssetBundle* bundle) {
 }
 
 static bool ConvertQWall(std::filesystem::path const& path) {
-    std::filesystem::path folder = getDataDir(MOD_ID);
-    folder /= "Walls";
-
-    logger.info("converting {}", path.string());
-
-    auto output = path.stem().string() + ".box";
-
-    auto bundle = UnityEngine::AssetBundle::LoadFromFile(path.string());
-    if (!bundle)
-        return false;
-
-    CustomModels::Manifest manifest;
-    if (!LoadManifest(bundle, manifest, path.stem())) {
-        bundle->Unload(true);
-        return false;
-    }
-    manifest.config = LoadWallConfig(bundle);
-
-    bool const written = WriteZip(bundle, manifest, path, folder, output);
-    bundle->Unload(true);
-    return written;
+    return ConvertLegacy(path, "Walls", ".box", LoadWallConfig);
 }
 
+static std::string LowerExtension(std::filesystem::path const& path) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension;
+}
+
+static constexpr char LegacyGuard[] = ".converting-legacy";
+
 void CustomModels::ConvertLegacyModels() {
-    std::filesystem::path folder = getDataDir(MOD_ID);
-    folder /= "Legacy";
+    std::filesystem::path root = getDataDir(MOD_ID);
+    std::filesystem::path folder = root / "Legacy";
 
-    ExtractZipFiles(folder);
+    try {
+        ExtractZipFiles(folder);
+    } catch (std::exception const& e) {
+        logger.error("failed to extract legacy zips: {}", e.what());
+    }
 
-    logger.info("converting legacy models");
-
-    std::vector<std::filesystem::path> remove;
-
-    for (auto const& entry : std::filesystem::directory_iterator(folder)) {
-        if (entry.is_directory())
-            continue;
-        try {
-            std::string extension = entry.path().extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            bool converted = false;
-            if (extension == ".qsaber")
-                converted = ConvertQSaber(entry.path());
-            else if (extension == ".qbloq")
-                converted = ConvertQBloq(entry.path());
-            else if (extension == ".qwall")
-                converted = ConvertQWall(entry.path());
-            else
-                logger.debug("skipping file {}", entry.path().string());
-            if (converted)
-                remove.emplace_back(entry.path());
-        } catch (il2cpp_utils::exceptions::StackTraceException const& exc) {
-            logger.error("failed to convert legacy model: {}", exc.what());
-        } catch (...) {
-            logger.error("failed to convert legacy model: unknown error");
+    // A legacy bundle that crashes Unity while loading would otherwise crash
+    // the game on every launch. Set aside whatever was being converted last.
+    std::error_code ec;
+    if (std::filesystem::exists(root / LegacyGuard, ec)) {
+        std::string source;
+        {
+            std::ifstream in(root / LegacyGuard);
+            std::getline(in, source);
+        }
+        std::filesystem::remove(root / LegacyGuard, ec);
+        if (!source.empty() && std::filesystem::exists(source, ec)) {
+            logger.error("legacy conversion of {} did not finish last time, skipping it", source);
+            std::filesystem::rename(source, source + ".failed", ec);
         }
     }
 
-    for (auto& file : remove)
-        std::filesystem::remove(file);
+    logger.info("converting legacy models");
+
+    // Legacy files are routed to Legacy/ by the qmod, but people copy them
+    // into the model folders by hand just as often, where they were ignored.
+    std::vector<std::filesystem::path> candidates;
+    for (auto const& subfolder : {"Legacy", "Sabers", "Notes", "Walls"}) {
+        auto directory = root / subfolder;
+        if (!std::filesystem::is_directory(directory, ec))
+            continue;
+        for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code typeError;
+            if (it->is_directory(typeError))
+                continue;
+            auto extension = LowerExtension(it->path());
+            if (extension == ".qsaber" || extension == ".qbloq" || extension == ".qwall")
+                candidates.emplace_back(it->path());
+        }
+        ec.clear();
+    }
+
+    for (auto const& path : candidates) {
+        auto extension = LowerExtension(path);
+        bool converted = false;
+        {
+            std::ofstream guard(root / LegacyGuard, std::ios::trunc);
+            guard << path.string();
+        }
+        try {
+            if (extension == ".qsaber")
+                converted = ConvertQSaber(path);
+            else if (extension == ".qbloq")
+                converted = ConvertQBloq(path);
+            else
+                converted = ConvertQWall(path);
+        } catch (std::exception const& exc) {
+            logger.error("failed to convert legacy model {}: {}", path.string(), exc.what());
+        } catch (...) {
+            logger.error("failed to convert legacy model {}: unknown error", path.string());
+        }
+        std::filesystem::remove(root / LegacyGuard, ec);
+
+        if (converted)
+            std::filesystem::remove(path, ec);
+        else {
+            // don't pay for (or risk) the same failure on every launch
+            std::filesystem::rename(path, path.string() + ".failed", ec);
+        }
+    }
 }
 
 static void CopyFolder(std::string const& source, std::string const& subfolder) {
